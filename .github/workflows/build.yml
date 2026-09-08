@@ -1,0 +1,30 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+      - name: Build
+        run: ./gradlew clean build --no-configuration-cache
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ae2-crafting-recovery
+          path: build/libs/*.jar
+          if-no-files-found: error
