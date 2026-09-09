@@ -129,6 +129,9 @@ public abstract class CraftingCpuLogicMixin {
     private boolean ae2cr$fullReplan;
 
     @Unique
+    private boolean ae2cr$routePreservingReplan;
+
+    @Unique
     private long ae2cr$attemptedFullReplanFingerprint = Long.MIN_VALUE;
 
     @Redirect(
@@ -173,6 +176,7 @@ public abstract class CraftingCpuLogicMixin {
                         + " simulation=" + adjustedPlan.simulation()
                         + " bytes=" + adjustedPlan.bytes()
                         + " patterns=" + adjustedPlan.patternTimes().size()
+                        + " routePreserving=" + ae2cr$routePreservingReplan
                         + " multiplePaths=" + adjustedPlan.multiplePaths()
                         + " missing=" + ae2cr$describeCounter(adjustedPlan.missingItems(), true)
                         + " plannedNetworkInputs=" + ae2cr$describeCounter(adjustedPlan.usedItems(), false)
@@ -392,6 +396,7 @@ public abstract class CraftingCpuLogicMixin {
         String message = "TOP_UP_SUCCESS cpu=" + ae2cr$cpuPosition()
                 + " output=" + jobView.ae2cr$getFinalOutput()
                 + " pattern=" + ae2cr$describePattern(candidate.pattern())
+                + " batchOperations=" + candidate.batchOperations()
                 + " inputs=" + candidate.missing();
         RecoveryDiagnostics.record(message);
         AE2CraftingRecovery.LOGGER.warn("AE2 recovery supplied a transactional seed set without cancelling job at CPU {}: {}",
@@ -586,6 +591,7 @@ public abstract class CraftingCpuLogicMixin {
 
         ae2cr$attemptedFullReplanFingerprint = fingerprint;
         ae2cr$fullReplan = true;
+        ae2cr$routePreservingReplan = true;
         ae2cr$recoveryPlayerId = jobView.ae2cr$getPlayerId();
         ae2cr$recoveryOutput = finalOutput.what();
         ae2cr$recoveryAmount = remainingAmount;
@@ -594,6 +600,7 @@ public abstract class CraftingCpuLogicMixin {
         ae2cr$recoveryFingerprint = fingerprint;
         RecoveryDiagnostics.record("FULL_REPLAN_STARTED cpu=" + ae2cr$cpuPosition()
                 + " request=" + remainingAmount + "x " + finalOutput.what()
+                + " route=original-patterns "
                 + " retainedCpuInventory=" + ae2cr$describeCounter(inventory.list, false));
         ae2cr$beginRecoveryCalculation();
         return true;
@@ -737,6 +744,7 @@ public abstract class CraftingCpuLogicMixin {
         ae2cr$replaceWaitingOutput = false;
         ae2cr$waitingOutputCredit = 0;
         ae2cr$fullReplan = false;
+        ae2cr$routePreservingReplan = false;
     }
 
     @Unique
@@ -773,7 +781,11 @@ public abstract class CraftingCpuLogicMixin {
         IActionSource recoverySource = recoveryPlayer == null
                 ? cluster.getSrc()
                 : IActionSource.ofPlayer(recoveryPlayer);
-        var requester = new RetainedInventoryCraftingRequester(recoverySource, inventory.list);
+        Map<IPatternDetails, ?> allowedPatterns = Map.of();
+        if (ae2cr$routePreservingReplan && ae2cr$recoveryOriginalJob != null) {
+            allowedPatterns = ((ExecutingCraftingJobAccessor) ae2cr$recoveryOriginalJob).ae2cr$getTasks();
+        }
+        var requester = new RetainedInventoryCraftingRequester(recoverySource, inventory.list, allowedPatterns);
         ae2cr$recalculation = cluster.getGrid().getCraftingService().beginCraftingCalculation(
                 cluster.getLevel(), requester, ae2cr$recoveryOutput, ae2cr$recoveryAmount,
                 CalculationStrategy.REPORT_MISSING_ITEMS);

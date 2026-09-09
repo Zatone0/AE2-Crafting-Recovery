@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.5 Beta - 2026-09-08
+
+* Recalculate stalled jobs using only the pattern route selected by the original job before falling back to top-ups.
+* Batch direct top-ups for as many as 64 remaining operations when CPU and network stock permit, reducing repeated one-item recovery cycles.
+* Record whether a failed preflight used route-preserving recovery and how many operations each top-up unlocked.
+
 ## 0.4.4 Beta - 2026-09-07
 
 * Detect provable AE2 crafting deadlocks without treating ordinary in-flight machine work as stalled.

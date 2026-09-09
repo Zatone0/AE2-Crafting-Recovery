@@ -6,7 +6,9 @@
   "refmap": "ae2_crafting_recovery.refmap.json",
   "mixins": [
     "CraftingCalculationMixin",
+    "CraftingCalculationAccessor",
     "CraftingCpuLogicMixin",
+    "CraftingTreeNodeMixin",
     "ExecutingCraftingJobAccessor",
     "NetworkCraftingSimulationStateAccessor",
     "TaskProgressAccessor"

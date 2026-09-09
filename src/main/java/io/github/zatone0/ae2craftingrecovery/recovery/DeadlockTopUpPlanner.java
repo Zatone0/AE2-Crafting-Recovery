@@ -18,8 +18,10 @@ import appeng.crafting.execution.CraftingCpuHelper;
 import appeng.crafting.inv.ListCraftingInventory;
 import net.minecraft.world.level.Level;
 
-/** Finds the smallest remaining operation that can be made runnable from network stock. */
+/** Finds a blocked pattern that can be made runnable from network stock in a bounded batch. */
 public final class DeadlockTopUpPlanner {
+    private static final long MAX_BATCH_OPERATIONS = 64;
+
     private DeadlockTopUpPlanner() {
     }
 
@@ -31,7 +33,7 @@ public final class DeadlockTopUpPlanner {
             if (task.getValue() <= 0) {
                 continue;
             }
-            buildCandidate(task.getKey(), task.getValue(), cpuInventory, level, network, source)
+            buildLargestCandidate(task.getKey(), task.getValue(), cpuInventory, level, network, source)
                     .ifPresent(candidates::add);
         }
         return candidates.stream()
@@ -89,14 +91,38 @@ public final class DeadlockTopUpPlanner {
                 .thenComparing(Comparator.comparingLong(SeedRequest::remainingOperations).reversed()));
     }
 
-    private static Optional<Candidate> buildCandidate(IPatternDetails pattern, long operations,
+    private static Optional<Candidate> buildLargestCandidate(IPatternDetails pattern, long operations,
+            ListCraftingInventory cpuInventory, Level level, MEStorage network, IActionSource source) {
+        long low = 1;
+        long high = Math.min(operations, MAX_BATCH_OPERATIONS);
+        Candidate best = null;
+        while (low <= high) {
+            long batch = low + (high - low) / 2;
+            var candidate = buildCandidate(pattern, operations, batch, cpuInventory, level, network, source);
+            if (candidate.isPresent()) {
+                best = candidate.get();
+                low = batch + 1;
+            } else {
+                high = batch - 1;
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+
+    private static Optional<Candidate> buildCandidate(IPatternDetails pattern, long operations, long batchOperations,
             ListCraftingInventory cpuInventory, Level level, MEStorage network, IActionSource source) {
         var snapshot = copy(cpuInventory);
         var reserved = new KeyCounter();
         var missing = new ArrayList<MissingInput>();
 
         for (var input : pattern.getInputs()) {
-            long remaining = input.getMultiplier();
+            final long remainingRequired;
+            try {
+                remainingRequired = Math.multiplyExact(input.getMultiplier(), batchOperations);
+            } catch (ArithmeticException ignored) {
+                return Optional.empty();
+            }
+            long remaining = remainingRequired;
             for (var template : CraftingCpuHelper.getValidItemTemplates(snapshot, input, level)) {
                 remaining -= CraftingCpuHelper.extractTemplates(snapshot, template, remaining);
                 if (remaining == 0) {
@@ -130,7 +156,8 @@ public final class DeadlockTopUpPlanner {
         if (missing.isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(new Candidate(pattern, operations, List.copyOf(missing), signature(pattern, missing)));
+        return Optional.of(new Candidate(pattern, operations, batchOperations,
+                List.copyOf(missing), signature(pattern, missing)));
     }
 
     private static ListCraftingInventory copy(ListCraftingInventory source) {
@@ -158,7 +185,7 @@ public final class DeadlockTopUpPlanner {
     public record MissingInput(AEKey key, long amount) {
     }
 
-    public record Candidate(IPatternDetails pattern, long remainingOperations,
+    public record Candidate(IPatternDetails pattern, long remainingOperations, long batchOperations,
             List<MissingInput> missing, long signature) {
         public long totalMissing() {
             long total = 0;
