@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.7 Beta - 2026-09-09
+
+* Resolve a rejected pattern push to its ExpandedAE pattern provider when that information is available.
+* Include the provider dimension and coordinates in diagnostics and the player's stall alert.
+* Add a player-scoped clickable chat action that uses ExpandedAE's existing 15-second block highlight.
+* Keep ExpandedAE integration optional so the recovery mod remains usable in packs without it.
+
 ## 0.4.6 Beta - 2026-09-09
 
 * Distinguish shared-provider contention from a jammed target by observing AE2's actual provider push attempts.

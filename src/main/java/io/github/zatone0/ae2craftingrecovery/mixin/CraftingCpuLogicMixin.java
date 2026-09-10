@@ -37,11 +37,15 @@ import appeng.crafting.execution.ExecutingCraftingJob;
 import appeng.crafting.inv.ListCraftingInventory;
 import appeng.me.cluster.implementations.CraftingCPUCluster;
 import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 
 import io.github.zatone0.ae2craftingrecovery.AE2CraftingRecovery;
+import io.github.zatone0.ae2craftingrecovery.compat.ExpandedAeHighlightCompat;
+import io.github.zatone0.ae2craftingrecovery.compat.ExpandedAeHighlightCompat.ProviderLocation;
 import io.github.zatone0.ae2craftingrecovery.diagnostic.DeadlockGraphAnalyzer;
 import io.github.zatone0.ae2craftingrecovery.diagnostic.PatternBlockage;
 import io.github.zatone0.ae2craftingrecovery.diagnostic.RecoveryDiagnostics;
@@ -150,6 +154,9 @@ public abstract class CraftingCpuLogicMixin {
 
     @Unique
     private final Map<String, Integer> ae2cr$rejectedPushesThisPass = new LinkedHashMap<>();
+
+    @Unique
+    private ProviderLocation ae2cr$rejectedProviderLocationThisPass;
 
     @Unique
     private int ae2cr$providerRejectionPasses;
@@ -376,6 +383,7 @@ public abstract class CraftingCpuLogicMixin {
         ae2cr$pushAttemptsThisPass = 0;
         ae2cr$acceptedPushesThisPass = 0;
         ae2cr$rejectedPushesThisPass.clear();
+        ae2cr$rejectedProviderLocationThisPass = null;
     }
 
     @Redirect(
@@ -404,6 +412,9 @@ public abstract class CraftingCpuLogicMixin {
         } else {
             String key = ae2cr$describePattern(pattern) + " provider=" + provider.getClass().getName();
             ae2cr$rejectedPushesThisPass.merge(key, 1, Integer::sum);
+            if (ae2cr$rejectedProviderLocationThisPass == null) {
+                ae2cr$rejectedProviderLocationThisPass = ExpandedAeHighlightCompat.locate(provider);
+            }
         }
         return accepted;
     }
@@ -443,15 +454,30 @@ public abstract class CraftingCpuLogicMixin {
                 + " elapsedPasses=" + ae2cr$providerRejectionPasses
                 + " providerChecks=" + ae2cr$providerChecksThisPass
                 + " busyProviders=" + ae2cr$busyProvidersThisPass
+                + " providerLocation=" + ae2cr$rejectedProviderLocationThisPass
                 + " rejectedPushes=[" + rejected + "]");
         AE2CraftingRecovery.LOGGER.error(
                 "AE2 provider repeatedly rejected a ready pattern for five minutes at CPU {}: {}; "
                         + "check the target machine inputs, recipe state, or provider blocking mode",
                 cluster.getBoundsMin(), rejected);
-        ae2cr$alertPlayer(jobView.ae2cr$getPlayerId(),
-                Component.literal("AE2 machine/provider rejected a ready pattern at CPU ")
-                        .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
-                        .append(Component.literal(ae2cr$cpuPosition()).withStyle(ChatFormatting.YELLOW)));
+        var player = ae2cr$getConnectedPlayer(jobView.ae2cr$getPlayerId());
+        var alert = Component.literal("AE2 machine/provider rejected a ready pattern at CPU ")
+                .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
+                .append(Component.literal(ae2cr$cpuPosition()).withStyle(ChatFormatting.YELLOW));
+        if (player != null && ae2cr$rejectedProviderLocationThisPass != null) {
+            int token = ExpandedAeHighlightCompat.remember(player, ae2cr$rejectedProviderLocationThisPass);
+            alert.append(Component.literal("; provider " + ae2cr$rejectedProviderLocationThisPass + " ")
+                    .withStyle(ChatFormatting.GOLD));
+            alert.append(Component.literal("[Highlight]").withStyle(style -> style
+                    .withColor(ChatFormatting.AQUA)
+                    .withUnderlined(true)
+                    .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ae2cr highlight " + token))
+                    .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
+                            Component.literal("Highlight this provider with ExpandedAE")))));
+        } else if (ae2cr$rejectedProviderLocationThisPass == null) {
+            alert.append(Component.literal("; provider location unavailable").withStyle(ChatFormatting.GRAY));
+        }
+        ae2cr$alertPlayer(jobView.ae2cr$getPlayerId(), alert);
         ae2cr$playAlertSound(jobView.ae2cr$getPlayerId());
     }
 
