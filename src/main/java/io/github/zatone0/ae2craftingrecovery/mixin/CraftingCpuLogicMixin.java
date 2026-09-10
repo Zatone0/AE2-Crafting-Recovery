@@ -24,6 +24,7 @@ import appeng.api.crafting.IPatternDetails;
 import appeng.api.features.IPlayerRegistry;
 import appeng.api.networking.crafting.CalculationStrategy;
 import appeng.api.networking.crafting.ICraftingPlan;
+import appeng.api.networking.crafting.ICraftingProvider;
 import appeng.api.networking.crafting.ICraftingSimulationRequester;
 import appeng.api.networking.crafting.CraftingSubmitErrorCode;
 import appeng.api.networking.security.IActionSource;
@@ -53,6 +54,7 @@ import io.github.zatone0.ae2craftingrecovery.recovery.TaskProgressFactory;
 @Mixin(value = CraftingCpuLogic.class, remap = false)
 public abstract class CraftingCpuLogicMixin {
     private static final int AE2CR_CONFIRMATION_PASSES = 20;
+    private static final int AE2CR_PROVIDER_REJECTION_PASSES = 6000;
 
     @Shadow
     @Final
@@ -133,6 +135,30 @@ public abstract class CraftingCpuLogicMixin {
 
     @Unique
     private long ae2cr$attemptedFullReplanFingerprint = Long.MIN_VALUE;
+
+    @Unique
+    private int ae2cr$providerChecksThisPass;
+
+    @Unique
+    private int ae2cr$busyProvidersThisPass;
+
+    @Unique
+    private int ae2cr$pushAttemptsThisPass;
+
+    @Unique
+    private int ae2cr$acceptedPushesThisPass;
+
+    @Unique
+    private final Map<String, Integer> ae2cr$rejectedPushesThisPass = new LinkedHashMap<>();
+
+    @Unique
+    private int ae2cr$providerRejectionPasses;
+
+    @Unique
+    private long ae2cr$providerRejectionFingerprint = Long.MIN_VALUE;
+
+    @Unique
+    private long ae2cr$alertedProviderRejectionFingerprint = Long.MIN_VALUE;
 
     @Redirect(
             method = { "finishJob", "tickCraftingLogic" },
@@ -274,6 +300,7 @@ public abstract class CraftingCpuLogicMixin {
             // made the cheapest recyclable branch win again after every operation,
             // starving the rest of a large dependency graph.
             ae2cr$deadlockPasses = 0;
+            ae2cr$resetProviderRejectionTracking();
             return;
         }
 
@@ -304,8 +331,11 @@ public abstract class CraftingCpuLogicMixin {
         var snapshot = ae2cr$copyInventory(inventory);
         if (ae2cr$hasRunnableTask(tasks, snapshot)) {
             ae2cr$deadlockPasses = 0;
+            ae2cr$monitorProviderRejections(jobView, tasks);
             return;
         }
+
+        ae2cr$resetProviderRejectionTracking();
 
         ae2cr$deadlockPasses++;
         if (ae2cr$deadlockPasses >= AE2CR_CONFIRMATION_PASSES) {
@@ -337,6 +367,98 @@ public abstract class CraftingCpuLogicMixin {
                 ae2cr$deadlockPasses = 0;
             }
         }
+    }
+
+    @Inject(method = "executeCrafting", at = @At("HEAD"))
+    private void ae2cr$beginProviderObservation(CallbackInfoReturnable<Integer> cir) {
+        ae2cr$providerChecksThisPass = 0;
+        ae2cr$busyProvidersThisPass = 0;
+        ae2cr$pushAttemptsThisPass = 0;
+        ae2cr$acceptedPushesThisPass = 0;
+        ae2cr$rejectedPushesThisPass.clear();
+    }
+
+    @Redirect(
+            method = "executeCrafting",
+            at = @At(value = "INVOKE",
+                    target = "Lappeng/api/networking/crafting/ICraftingProvider;isBusy()Z"))
+    private boolean ae2cr$observeProviderBusy(ICraftingProvider provider) {
+        ae2cr$providerChecksThisPass++;
+        boolean busy = provider.isBusy();
+        if (busy) {
+            ae2cr$busyProvidersThisPass++;
+        }
+        return busy;
+    }
+
+    @Redirect(
+            method = "executeCrafting",
+            at = @At(value = "INVOKE",
+                    target = "Lappeng/api/networking/crafting/ICraftingProvider;pushPattern(Lappeng/api/crafting/IPatternDetails;[Lappeng/api/stacks/KeyCounter;)Z"))
+    private boolean ae2cr$observePatternPush(ICraftingProvider provider, IPatternDetails pattern,
+            KeyCounter[] inputHolder) {
+        ae2cr$pushAttemptsThisPass++;
+        boolean accepted = provider.pushPattern(pattern, inputHolder);
+        if (accepted) {
+            ae2cr$acceptedPushesThisPass++;
+        } else {
+            String key = ae2cr$describePattern(pattern) + " provider=" + provider.getClass().getName();
+            ae2cr$rejectedPushesThisPass.merge(key, 1, Integer::sum);
+        }
+        return accepted;
+    }
+
+    @Unique
+    private void ae2cr$monitorProviderRejections(ExecutingCraftingJobAccessor jobView,
+            Map<IPatternDetails, Object> tasks) {
+        // Busy providers are normal shared-network contention. Only an actual push
+        // to a provider that reports itself idle and then rejects the pattern is a
+        // machine/provider-side blockage.
+        if (ae2cr$acceptedPushesThisPass > 0 || ae2cr$pushAttemptsThisPass == 0) {
+            ae2cr$resetProviderRejectionTracking();
+            return;
+        }
+
+        long fingerprint = ae2cr$fingerprint(jobView, tasks);
+        for (var entry : ae2cr$rejectedPushesThisPass.entrySet()) {
+            fingerprint ^= ae2cr$mix64(((long) entry.getKey().hashCode() << 32) ^ entry.getValue());
+        }
+        if (fingerprint != ae2cr$providerRejectionFingerprint) {
+            ae2cr$providerRejectionFingerprint = fingerprint;
+            ae2cr$providerRejectionPasses = 1;
+            return;
+        }
+        ae2cr$providerRejectionPasses++;
+        if (ae2cr$providerRejectionPasses < AE2CR_PROVIDER_REJECTION_PASSES
+                || ae2cr$alertedProviderRejectionFingerprint == fingerprint) {
+            return;
+        }
+
+        ae2cr$alertedProviderRejectionFingerprint = fingerprint;
+        String rejected = ae2cr$rejectedPushesThisPass.entrySet().stream()
+                .map(entry -> entry.getValue() + "x " + entry.getKey())
+                .collect(Collectors.joining("; "));
+        RecoveryDiagnostics.record("PROVIDER_REJECTION_STALL cpu=" + ae2cr$cpuPosition()
+                + " output=" + jobView.ae2cr$getFinalOutput()
+                + " elapsedPasses=" + ae2cr$providerRejectionPasses
+                + " providerChecks=" + ae2cr$providerChecksThisPass
+                + " busyProviders=" + ae2cr$busyProvidersThisPass
+                + " rejectedPushes=[" + rejected + "]");
+        AE2CraftingRecovery.LOGGER.error(
+                "AE2 provider repeatedly rejected a ready pattern for five minutes at CPU {}: {}; "
+                        + "check the target machine inputs, recipe state, or provider blocking mode",
+                cluster.getBoundsMin(), rejected);
+        ae2cr$alertPlayer(jobView.ae2cr$getPlayerId(),
+                Component.literal("AE2 machine/provider rejected a ready pattern at CPU ")
+                        .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
+                        .append(Component.literal(ae2cr$cpuPosition()).withStyle(ChatFormatting.YELLOW)));
+        ae2cr$playAlertSound(jobView.ae2cr$getPlayerId());
+    }
+
+    @Unique
+    private void ae2cr$resetProviderRejectionTracking() {
+        ae2cr$providerRejectionPasses = 0;
+        ae2cr$providerRejectionFingerprint = Long.MIN_VALUE;
     }
 
     @Unique

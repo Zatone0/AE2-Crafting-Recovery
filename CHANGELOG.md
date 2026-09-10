@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.6 Beta - 2026-09-09
+
+* Distinguish shared-provider contention from a jammed target by observing AE2's actual provider push attempts.
+* Alert only after an idle provider rejects the same ready pattern for five minutes; busy providers do not advance the stall timer.
+* Record the rejected pattern and provider implementation in the dedicated recovery log without injecting more inputs.
+
 ## 0.4.5 Beta - 2026-09-08
 
 * Recalculate stalled jobs using only the pattern route selected by the original job before falling back to top-ups.
