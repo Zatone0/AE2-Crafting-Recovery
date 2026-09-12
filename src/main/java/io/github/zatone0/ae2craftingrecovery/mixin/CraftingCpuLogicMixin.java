@@ -123,13 +123,10 @@ public abstract class CraftingCpuLogicMixin {
     private int ae2cr$waitingStablePasses;
 
     @Unique
-    private long ae2cr$alertedWaitingFingerprint;
+    private ExecutingCraftingJob ae2cr$waitingWarningJob;
 
     @Unique
-    private boolean ae2cr$replaceWaitingOutput;
-
-    @Unique
-    private long ae2cr$waitingOutputCredit;
+    private final java.util.Set<AEKey> ae2cr$warnedWaitingOutputs = new HashSet<>();
 
     @Unique
     private boolean ae2cr$fullReplan;
@@ -321,12 +318,11 @@ public abstract class CraftingCpuLogicMixin {
         if (ae2cr$hasPositiveEntries(jobView.ae2cr$getWaitingFor().list)) {
             ae2cr$monitorWaitingOutputs(jobView);
             ae2cr$deadlockPasses = 0;
-            // Before the timeout, assume a real machine is still working. Once the
-            // waiting set is proven stale, allow recovery of any replacement tasks
-            // that were merged underneath that original waiting entry.
-            if (ae2cr$waitingStablePasses < 6000) {
-                return;
-            }
+            // An outstanding output means AE2 has already dispatched real work. Its
+            // duration cannot prove that the work was lost: a machine may be slow,
+            // starved of fuel, paused, or otherwise externally gated. Never submit
+            // replacement work or top-ups while any output is still in flight.
+            return;
         }
         ae2cr$waitingStablePasses = 0;
         ae2cr$waitingFingerprint = 0;
@@ -568,6 +564,12 @@ public abstract class CraftingCpuLogicMixin {
     @Unique
     private void ae2cr$monitorWaitingOutputs(ExecutingCraftingJobAccessor jobView) {
         var waiting = jobView.ae2cr$getWaitingFor().list;
+        if (ae2cr$waitingWarningJob != job) {
+            ae2cr$waitingWarningJob = job;
+            ae2cr$warnedWaitingOutputs.clear();
+            ae2cr$waitingFingerprint = 0;
+            ae2cr$waitingStablePasses = 0;
+        }
         long fingerprint = 0;
         for (var entry : waiting) {
             fingerprint ^= ae2cr$mix64(((long) entry.getKey().hashCode() << 32) ^ entry.getLongValue());
@@ -579,97 +581,30 @@ public abstract class CraftingCpuLogicMixin {
         }
         ae2cr$waitingStablePasses++;
 
-        // A returned output can be routed into general ME storage instead of back to
-        // its CPU. Reclaiming an exact key is equivalent to the normal return path and
-        // cannot duplicate an in-flight machine operation.
-        if (ae2cr$waitingStablePasses >= 20 && ae2cr$reconcileWaitingFromStorage(jobView)) {
-            ae2cr$waitingStablePasses = 0;
-            ae2cr$waitingFingerprint = 0;
-            return;
-        }
-
-        // Five minutes unchanged distinguishes ordinary long recipes from an output
-        // that is genuinely no longer in flight. This release diagnoses that state;
-        // replacement-subgraph calculation will use the same established timer.
-        if (ae2cr$waitingStablePasses >= 6000 && ae2cr$alertedWaitingFingerprint != fingerprint) {
-            if (ae2cr$tryReplaceWaitingOutput(jobView)) {
-                return;
-            }
-            ae2cr$alertedWaitingFingerprint = fingerprint;
-            RecoveryDiagnostics.record("WAITING_OUTPUT_STALLED cpu=" + ae2cr$cpuPosition()
-                    + " output=" + jobView.ae2cr$getFinalOutput()
-                    + " waiting=" + ae2cr$describeCounter(waiting, true));
-            AE2CraftingRecovery.LOGGER.error(
-                    "AE2 craft has unchanged in-flight outputs for five minutes at CPU {}: {}; full evidence is in logs/ae2-crafting-recovery.log",
-                    cluster.getBoundsMin(), ae2cr$describeCounter(waiting, true));
-            ae2cr$alertPlayer(jobView.ae2cr$getPlayerId(), Component.literal("AE2 craft has a missing returned output at CPU ")
-                    .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
-                    .append(Component.literal(ae2cr$cpuPosition()).withStyle(ChatFormatting.YELLOW)));
-            ae2cr$playAlertSound(jobView.ae2cr$getPlayerId());
-        }
-    }
-
-    @Unique
-    private boolean ae2cr$reconcileWaitingFromStorage(ExecutingCraftingJobAccessor jobView) {
-        var network = cluster.getGrid().getStorageService().getInventory();
-        var player = ae2cr$getConnectedPlayer(jobView.ae2cr$getPlayerId());
-        IActionSource source = player == null ? cluster.getSrc() : IActionSource.ofPlayer(player);
-        for (var entry : jobView.ae2cr$getWaitingFor().list) {
-            long stored = network.extract(entry.getKey(), entry.getLongValue(), Actionable.SIMULATE, source);
-            if (stored <= 0) {
-                continue;
-            }
-            long accepted = ((CraftingCpuLogic) (Object) this).insert(
-                    entry.getKey(), stored, Actionable.SIMULATE);
-            if (accepted <= 0) {
-                continue;
-            }
-            long extracted = network.extract(entry.getKey(), accepted, Actionable.MODULATE, source);
-            if (extracted <= 0) {
-                continue;
-            }
-            long inserted = ((CraftingCpuLogic) (Object) this).insert(
-                    entry.getKey(), extracted, Actionable.MODULATE);
-            long remainder = extracted - inserted;
-            if (remainder > 0) {
-                long restored = network.insert(entry.getKey(), remainder, Actionable.MODULATE, source);
-                if (restored < remainder) {
-                    inventory.insert(entry.getKey(), remainder - restored, Actionable.MODULATE);
+        // Duration alone is diagnostic evidence, never recovery authority. Warn once
+        // per output key for this job after ten minutes of an unchanged waiting set.
+        if (ae2cr$waitingStablePasses >= 12_000) {
+            for (var entry : waiting) {
+                if (!ae2cr$warnedWaitingOutputs.add(entry.getKey())) {
+                    continue;
                 }
-            }
-            if (inserted > 0) {
-                RecoveryDiagnostics.record("WAITING_OUTPUT_RECONCILED cpu=" + ae2cr$cpuPosition()
-                        + " key=" + entry.getKey() + " amount=" + inserted);
-                cluster.markDirty();
-                return true;
+                RecoveryDiagnostics.record("WAITING_OUTPUT_DELAYED cpu=" + ae2cr$cpuPosition()
+                        + " output=" + jobView.ae2cr$getFinalOutput()
+                        + " delayedKey=" + entry.getKey()
+                        + " delayedAmount=" + entry.getLongValue()
+                        + " waiting=" + ae2cr$describeCounter(waiting, true));
+                AE2CraftingRecovery.LOGGER.warn(
+                        "AE2 craft has waited at least ten minutes for {}x {} at CPU {}; warning only, no recovery work was submitted",
+                        entry.getLongValue(), entry.getKey(), cluster.getBoundsMin());
+                ae2cr$alertPlayer(jobView.ae2cr$getPlayerId(),
+                        Component.literal("AE2 craft has waited over 10 minutes for ")
+                                .withStyle(ChatFormatting.GOLD)
+                                .append(entry.getKey().getDisplayName().copy().withStyle(ChatFormatting.YELLOW))
+                                .append(Component.literal(" at CPU " + ae2cr$cpuPosition()
+                                        + ". Is this machine stalled?")
+                                        .withStyle(ChatFormatting.GOLD)));
             }
         }
-        return false;
-    }
-
-    @Unique
-    private boolean ae2cr$tryReplaceWaitingOutput(ExecutingCraftingJobAccessor jobView) {
-        if (ae2cr$recalculation != null || ae2cr$replaceWaitingOutput) {
-            return ae2cr$recalculation != null;
-        }
-        var crafting = cluster.getGrid().getCraftingService();
-        for (var entry : jobView.ae2cr$getWaitingFor().list) {
-            if (!crafting.isCraftable(entry.getKey())) {
-                continue;
-            }
-            ae2cr$replaceWaitingOutput = true;
-            ae2cr$waitingOutputCredit = entry.getLongValue();
-            ae2cr$recoveryPlayerId = jobView.ae2cr$getPlayerId();
-            ae2cr$recoveryOutput = entry.getKey();
-            ae2cr$recoveryAmount = entry.getLongValue();
-            ae2cr$recoveryOriginalJob = job;
-            ae2cr$recoveryFingerprint = ae2cr$fingerprint(jobView, jobView.ae2cr$getTasks());
-            RecoveryDiagnostics.record("WAITING_REPLACEMENT_STARTED cpu=" + ae2cr$cpuPosition()
-                    + " key=" + entry.getKey() + " amount=" + entry.getLongValue());
-            ae2cr$beginRecoveryCalculation();
-            return true;
-        }
-        return false;
     }
 
     @Unique
@@ -876,10 +811,7 @@ public abstract class CraftingCpuLogicMixin {
 
     @Unique
     private long ae2cr$expectedOutputAddition(AEKey key, long emittedAmount) {
-        if (!ae2cr$replaceWaitingOutput || !key.equals(ae2cr$recoveryOutput)) {
-            return emittedAmount;
-        }
-        return Math.max(0, emittedAmount - ae2cr$waitingOutputCredit);
+        return emittedAmount;
     }
 
     @Unique
@@ -889,8 +821,6 @@ public abstract class CraftingCpuLogicMixin {
         ae2cr$recoveryOutput = null;
         ae2cr$recoveryAmount = 0;
         ae2cr$recalculationAttempts = 0;
-        ae2cr$replaceWaitingOutput = false;
-        ae2cr$waitingOutputCredit = 0;
         ae2cr$fullReplan = false;
         ae2cr$routePreservingReplan = false;
     }

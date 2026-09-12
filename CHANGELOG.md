@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.8 Beta - 2026-09-11
+
+* Treat every outstanding machine output as in flight regardless of age; delayed outputs can no longer trigger replanning, replacement subplans, or top-ups.
+* Replace the five-minute missing-output recovery with a warning-only alert after ten minutes.
+* Emit that delay warning only once per waiting output key for the life of each craft.
+* Stop reclaiming presumed returned outputs from general ME storage while a machine operation remains in flight.
+
 ## 0.4.7 Beta - 2026-09-09
 
 * Resolve a rejected pattern push to its ExpandedAE pattern provider when that information is available.
