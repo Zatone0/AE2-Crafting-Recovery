@@ -1,18 +1,20 @@
 package io.github.zatone0.ae2craftingrecovery.recovery;
 
-import java.util.IdentityHashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 import appeng.api.crafting.IPatternDetails;
 import appeng.api.networking.crafting.ICraftingSimulationRequester;
 import appeng.api.networking.security.IActionSource;
 import appeng.api.stacks.KeyCounter;
+import appeng.api.stacks.AEItemKey;
 
 /** Carries a stable CPU-inventory snapshot into AE2's asynchronous calculator. */
 public final class RetainedInventoryCraftingRequester implements ICraftingSimulationRequester {
     private final IActionSource actionSource;
     private final KeyCounter retainedItems = new KeyCounter();
-    private final Map<IPatternDetails, Boolean> allowedPatterns = new IdentityHashMap<>();
+    private final Set<AEItemKey> allowedPatternDefinitions = new HashSet<>();
 
     public RetainedInventoryCraftingRequester(IActionSource actionSource, KeyCounter retainedItems) {
         this(actionSource, retainedItems, Map.of());
@@ -23,7 +25,7 @@ public final class RetainedInventoryCraftingRequester implements ICraftingSimula
         this.actionSource = actionSource;
         this.retainedItems.addAll(retainedItems);
         for (var pattern : allowedPatterns.keySet()) {
-            this.allowedPatterns.put(pattern, Boolean.TRUE);
+            this.allowedPatternDefinitions.add(pattern.getDefinition());
         }
     }
 
@@ -37,10 +39,14 @@ public final class RetainedInventoryCraftingRequester implements ICraftingSimula
     }
 
     public boolean restrictsPatterns() {
-        return !allowedPatterns.isEmpty();
+        return !allowedPatternDefinitions.isEmpty();
     }
 
     public boolean allows(IPatternDetails pattern) {
-        return allowedPatterns.containsKey(pattern);
+        return allowedPatternDefinitions.contains(pattern.getDefinition());
+    }
+
+    public int allowedPatternCount() {
+        return allowedPatternDefinitions.size();
     }
 }

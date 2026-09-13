@@ -719,7 +719,10 @@ public abstract class CraftingCpuLogicMixin {
                         + " patterns=" + plan.patternTimes().size()
                         + " missing=" + ae2cr$describeCounter(plan.missingItems(), true));
                 ae2cr$clearRecoveryState();
-                ae2cr$lastReportedJob = null;
+                // Keep the unchanged-state report guard. Retrying another seed every
+                // tick caused complete candidate sweeps and multi-megabyte log bursts
+                // when AE2 could not resolve any of them. A real task or inventory
+                // change produces a new fingerprint and permits another attempt.
                 return;
             }
 
@@ -864,6 +867,10 @@ public abstract class CraftingCpuLogicMixin {
             allowedPatterns = ((ExecutingCraftingJobAccessor) ae2cr$recoveryOriginalJob).ae2cr$getTasks();
         }
         var requester = new RetainedInventoryCraftingRequester(recoverySource, inventory.list, allowedPatterns);
+        RecoveryDiagnostics.record("RECOVERY_CALCULATION_REQUEST cpu=" + ae2cr$cpuPosition()
+                + " output=" + ae2cr$recoveryAmount + "x " + ae2cr$recoveryOutput
+                + " routePreserving=" + ae2cr$routePreservingReplan
+                + " allowedPatternDefinitions=" + requester.allowedPatternCount());
         ae2cr$recalculation = cluster.getGrid().getCraftingService().beginCraftingCalculation(
                 cluster.getLevel(), requester, ae2cr$recoveryOutput, ae2cr$recoveryAmount,
                 CalculationStrategy.REPORT_MISSING_ITEMS);

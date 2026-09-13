@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.9 Beta - 2026-09-13
+
+* Match route-preserving recovery patterns by their stable encoded pattern definition instead of transient object identity.
+* Record the number of allowed pattern definitions supplied to each recovery calculation.
+* Stop retrying failed seed calculations until the job's task or retained-inventory state actually changes.
+
 ## 0.4.8 Beta - 2026-09-11
 
 * Treat every outstanding machine output as in flight regardless of age; delayed outputs can no longer trigger replanning, replacement subplans, or top-ups.
