@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Set;
 
 import appeng.api.crafting.IPatternDetails;
+import appeng.api.networking.IGridNode;
 import appeng.api.networking.crafting.ICraftingSimulationRequester;
 import appeng.api.networking.security.IActionSource;
 import appeng.api.stacks.KeyCounter;
@@ -13,25 +14,29 @@ import appeng.api.stacks.AEItemKey;
 /** Carries a stable CPU-inventory snapshot into AE2's asynchronous calculator. */
 public final class RetainedInventoryCraftingRequester implements ICraftingSimulationRequester {
     private final IActionSource actionSource;
+    private final IGridNode gridNode;
     private final KeyCounter retainedItems = new KeyCounter();
     private final Set<AEItemKey> allowedPatternDefinitions = new HashSet<>();
 
-    public RetainedInventoryCraftingRequester(IActionSource actionSource, KeyCounter retainedItems) {
-        this(actionSource, retainedItems, Map.of());
+    public RetainedInventoryCraftingRequester(IActionSource actionSource, IGridNode gridNode,
+            KeyCounter retainedItems) {
+        this(actionSource, gridNode, retainedItems, Map.of());
     }
 
-    public RetainedInventoryCraftingRequester(IActionSource actionSource, KeyCounter retainedItems,
-            Map<IPatternDetails, ?> allowedPatterns) {
+    public RetainedInventoryCraftingRequester(IActionSource actionSource, IGridNode gridNode,
+            KeyCounter retainedItems, Map<IPatternDetails, ?> allowedPatterns) {
         this.actionSource = actionSource;
+        this.gridNode = gridNode;
         this.retainedItems.addAll(retainedItems);
         for (var pattern : allowedPatterns.keySet()) {
             this.allowedPatternDefinitions.add(pattern.getDefinition());
         }
     }
 
-    public RetainedInventoryCraftingRequester(IActionSource actionSource, KeyCounter retainedItems,
-            Iterable<AEItemKey> allowedPatternDefinitions) {
+    public RetainedInventoryCraftingRequester(IActionSource actionSource, IGridNode gridNode,
+            KeyCounter retainedItems, Iterable<AEItemKey> allowedPatternDefinitions) {
         this.actionSource = actionSource;
+        this.gridNode = gridNode;
         this.retainedItems.addAll(retainedItems);
         for (var definition : allowedPatternDefinitions) {
             this.allowedPatternDefinitions.add(definition);
@@ -41,6 +46,11 @@ public final class RetainedInventoryCraftingRequester implements ICraftingSimula
     @Override
     public IActionSource getActionSource() {
         return actionSource;
+    }
+
+    @Override
+    public IGridNode getGridNode() {
+        return gridNode;
     }
 
     public KeyCounter retainedItems() {

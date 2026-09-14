@@ -887,11 +887,12 @@ public abstract class CraftingCpuLogicMixin {
                     .ae2cr$getOriginalPatternDefinitions();
         }
         var requester = new RetainedInventoryCraftingRequester(
-                recoverySource, inventory.list, allowedPatternDefinitions);
+                recoverySource, cluster.getNode(), inventory.list, allowedPatternDefinitions);
         RecoveryDiagnostics.record("RECOVERY_CALCULATION_REQUEST cpu=" + ae2cr$cpuPosition()
                 + " output=" + ae2cr$recoveryAmount + "x " + ae2cr$recoveryOutput
                 + " routePreserving=" + ae2cr$routePreservingReplan
-                + " allowedPatternDefinitions=" + requester.allowedPatternCount());
+                + " allowedPatternDefinitions=" + requester.allowedPatternCount()
+                + " gridNodePresent=" + (requester.getGridNode() != null));
         ae2cr$recalculation = cluster.getGrid().getCraftingService().beginCraftingCalculation(
                 cluster.getLevel(), requester, ae2cr$recoveryOutput, ae2cr$recoveryAmount,
                 CalculationStrategy.REPORT_MISSING_ITEMS);

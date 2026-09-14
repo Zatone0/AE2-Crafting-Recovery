@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2 Beta - 2026-09-14
+
+* Give recovery calculations the crafting CPU's grid node so AE2 can enumerate and build the archived pattern route instead of returning a zero-pattern simulation.
+* Record whether the recovery requester received a grid node in the dedicated diagnostic log.
+
 ## 0.5.1 Beta - 2026-09-13
 
 * Move the crafting-job archive interface outside the reserved Mixin package, fixing the dedicated-server `IllegalClassLoadError` when AE2 CPUs load saved jobs.
