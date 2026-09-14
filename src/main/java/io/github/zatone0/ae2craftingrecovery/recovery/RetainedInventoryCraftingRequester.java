@@ -29,6 +29,15 @@ public final class RetainedInventoryCraftingRequester implements ICraftingSimula
         }
     }
 
+    public RetainedInventoryCraftingRequester(IActionSource actionSource, KeyCounter retainedItems,
+            Iterable<AEItemKey> allowedPatternDefinitions) {
+        this.actionSource = actionSource;
+        this.retainedItems.addAll(retainedItems);
+        for (var definition : allowedPatternDefinitions) {
+            this.allowedPatternDefinitions.add(definition);
+        }
+    }
+
     @Override
     public IActionSource getActionSource() {
         return actionSource;

@@ -25,8 +25,11 @@ import appeng.api.features.IPlayerRegistry;
 import appeng.api.networking.crafting.CalculationStrategy;
 import appeng.api.networking.crafting.ICraftingPlan;
 import appeng.api.networking.crafting.ICraftingProvider;
+import appeng.api.networking.crafting.ICraftingRequester;
 import appeng.api.networking.crafting.ICraftingSimulationRequester;
+import appeng.api.networking.crafting.ICraftingSubmitResult;
 import appeng.api.networking.crafting.CraftingSubmitErrorCode;
+import appeng.api.networking.IGrid;
 import appeng.api.networking.security.IActionSource;
 import appeng.api.stacks.AEKey;
 import appeng.api.stacks.GenericStack;
@@ -49,6 +52,7 @@ import io.github.zatone0.ae2craftingrecovery.compat.ExpandedAeHighlightCompat.Pr
 import io.github.zatone0.ae2craftingrecovery.diagnostic.DeadlockGraphAnalyzer;
 import io.github.zatone0.ae2craftingrecovery.diagnostic.PatternBlockage;
 import io.github.zatone0.ae2craftingrecovery.diagnostic.RecoveryDiagnostics;
+import io.github.zatone0.ae2craftingrecovery.notification.PendingPlayerAlerts;
 import io.github.zatone0.ae2craftingrecovery.recovery.DeadlockTopUpPlanner;
 import io.github.zatone0.ae2craftingrecovery.recovery.RetainedInventoryCraftingRequester;
 import io.github.zatone0.ae2craftingrecovery.recovery.CpuInventoryCraftingPlan;
@@ -163,6 +167,20 @@ public abstract class CraftingCpuLogicMixin {
 
     @Unique
     private long ae2cr$alertedProviderRejectionFingerprint = Long.MIN_VALUE;
+
+    @Inject(method = "trySubmitJob", at = @At("RETURN"))
+    private void ae2cr$archiveSubmittedPlan(IGrid grid, ICraftingPlan plan, IActionSource source,
+            ICraftingRequester requester, CallbackInfoReturnable<ICraftingSubmitResult> cir) {
+        if (cir.getReturnValue().successful() && job != null) {
+            var definitions = plan.patternTimes().keySet().stream()
+                    .map(IPatternDetails::getDefinition)
+                    .collect(Collectors.toSet());
+            ((ExecutingCraftingJobPatternArchive) job).ae2cr$setOriginalPatternDefinitions(definitions);
+            RecoveryDiagnostics.record("ORIGINAL_PATTERN_ARCHIVE_CREATED cpu=" + ae2cr$cpuPosition()
+                    + " definitions=" + definitions.size()
+                    + " output=" + plan.finalOutput());
+        }
+    }
 
     @Redirect(
             method = { "finishJob", "tickCraftingLogic" },
@@ -862,11 +880,13 @@ public abstract class CraftingCpuLogicMixin {
         IActionSource recoverySource = recoveryPlayer == null
                 ? cluster.getSrc()
                 : IActionSource.ofPlayer(recoveryPlayer);
-        Map<IPatternDetails, ?> allowedPatterns = Map.of();
+        Iterable<appeng.api.stacks.AEItemKey> allowedPatternDefinitions = List.of();
         if (ae2cr$routePreservingReplan && ae2cr$recoveryOriginalJob != null) {
-            allowedPatterns = ((ExecutingCraftingJobAccessor) ae2cr$recoveryOriginalJob).ae2cr$getTasks();
+            allowedPatternDefinitions = ((ExecutingCraftingJobPatternArchive) ae2cr$recoveryOriginalJob)
+                    .ae2cr$getOriginalPatternDefinitions();
         }
-        var requester = new RetainedInventoryCraftingRequester(recoverySource, inventory.list, allowedPatterns);
+        var requester = new RetainedInventoryCraftingRequester(
+                recoverySource, inventory.list, allowedPatternDefinitions);
         RecoveryDiagnostics.record("RECOVERY_CALCULATION_REQUEST cpu=" + ae2cr$cpuPosition()
                 + " output=" + ae2cr$recoveryAmount + "x " + ae2cr$recoveryOutput
                 + " routePreserving=" + ae2cr$routePreservingReplan
@@ -1049,6 +1069,14 @@ public abstract class CraftingCpuLogicMixin {
         var player = ae2cr$getConnectedPlayer(playerId);
         if (player != null) {
             player.sendSystemMessage(message);
+            return;
+        }
+        var server = cluster.getLevel().getServer();
+        if (server != null && playerId != null) {
+            var profileId = IPlayerRegistry.getMapping(server).getProfileId(playerId);
+            if (profileId != null) {
+                PendingPlayerAlerts.get(server).queue(profileId, message);
+            }
         }
     }
 

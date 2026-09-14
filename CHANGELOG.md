@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 Beta - 2026-09-13
+
+* Archive every pattern definition from the original submitted plan inside the crafting job and preserve it through world saves and restarts.
+* Use that complete archive for route-preserving replans instead of the shrinking unfinished-task ledger.
+* Persist up to 32 deduplicated alerts per craft owner while they are offline and deliver them once at their next login.
+* Keep legacy jobs compatible by initializing their archive from the patterns that still remain.
+
 ## 0.4.9 Beta - 2026-09-13
 
 * Match route-preserving recovery patterns by their stable encoded pattern definition instead of transient object identity.
