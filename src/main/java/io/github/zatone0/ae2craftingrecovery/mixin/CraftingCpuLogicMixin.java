@@ -36,8 +36,10 @@ import appeng.api.stacks.GenericStack;
 import appeng.api.stacks.KeyCounter;
 import appeng.crafting.execution.CraftingCpuHelper;
 import appeng.crafting.execution.CraftingCpuLogic;
+import appeng.crafting.execution.ElapsedTimeTracker;
 import appeng.crafting.execution.ExecutingCraftingJob;
 import appeng.crafting.inv.ListCraftingInventory;
+import appeng.core.AELog;
 import appeng.me.cluster.implementations.CraftingCPUCluster;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ClickEvent;
@@ -98,6 +100,9 @@ public abstract class CraftingCpuLogicMixin {
 
     @Unique
     private boolean ae2cr$retainCpuInventory;
+
+    @Unique
+    private long ae2cr$recoveryElapsedTime = -1;
 
     @Unique
     private AEKey ae2cr$recoveryOutput;
@@ -186,6 +191,42 @@ public abstract class CraftingCpuLogicMixin {
     }
 
     @Redirect(
+            method = "trySubmitJob",
+            at = @At(value = "INVOKE", target = "Lappeng/core/AELog;warn(Ljava/lang/String;[Ljava/lang/Object;)V"))
+    private void ae2cr$suppressExpectedRetainedInventoryWarning(String message, Object[] args) {
+        if (ae2cr$retainCpuInventory) {
+            RecoveryDiagnostics.record("EXPECTED_NONEMPTY_CPU_SUBMISSION cpu=" + ae2cr$cpuPosition()
+                    + " cpuName=\"" + ae2cr$cpuName() + "\""
+                    + " retainedCpuInventory=" + ae2cr$describeCounter(inventory.list, false));
+            return;
+        }
+        AELog.warn(message, args);
+    }
+
+    @Inject(method = "finishJob", at = @At("HEAD"))
+    private void ae2cr$recordRecoveryJobCompletion(boolean completed, CallbackInfo ci) {
+        if (!ae2cr$recoveryJob || job == null) {
+            return;
+        }
+
+        var jobView = (ExecutingCraftingJobAccessor) job;
+        ElapsedTimeTracker tracker = ((CraftingCpuLogic) (Object) this).getElapsedTimeTracker();
+        RecoveryDiagnostics.record((completed ? "RECOVERY_JOB_FINISHED" : "RECOVERY_JOB_CANCELLED")
+                + " cpu=" + ae2cr$cpuPosition()
+                + " cpuName=\"" + ae2cr$cpuName() + "\""
+                + " finalOutput=" + jobView.ae2cr$getFinalOutput()
+                + " remainingAmount=" + jobView.ae2cr$getRemainingAmount()
+                + " elapsedNanos=" + (tracker == null ? -1 : tracker.getElapsedTime())
+                + " retainedForAnotherReplan=" + ae2cr$retainCpuInventory);
+
+        // A recovery-driven cancellation immediately replaces this job and remains
+        // a recovery job. Completion or an external cancellation ends that lineage.
+        if (completed || !ae2cr$retainCpuInventory) {
+            ae2cr$recoveryJob = false;
+        }
+    }
+
+    @Redirect(
             method = { "finishJob", "tickCraftingLogic" },
             at = @At(value = "INVOKE", target = "Lappeng/crafting/execution/CraftingCpuLogic;storeItems()V"))
     private void ae2cr$retainInventoryDuringRecovery(CraftingCpuLogic logic) {
@@ -250,6 +291,10 @@ public abstract class CraftingCpuLogicMixin {
             // Preflight succeeded. Only now replace the original job, retaining its
             // physical inventory across cancellation and submission.
             if (job != null) {
+                ElapsedTimeTracker tracker = ((CraftingCpuLogic) (Object) this).getElapsedTimeTracker();
+                if (tracker != null) {
+                    ae2cr$recoveryElapsedTime = tracker.getElapsedTime();
+                }
                 ae2cr$retainCpuInventory = true;
                 ((CraftingCpuLogic) (Object) this).cancel();
             }
@@ -262,10 +307,16 @@ public abstract class CraftingCpuLogicMixin {
                     .submitJob(adjustedPlan, null, cluster, false, submissionSource);
             if (result.successful()) {
                 Integer recoveryPlayerId = ae2cr$recoveryPlayerId;
+                ElapsedTimeTracker replacementTracker = ((CraftingCpuLogic) (Object) this).getElapsedTimeTracker();
+                if (replacementTracker != null && ae2cr$recoveryElapsedTime >= 0) {
+                    ((ElapsedTimeTrackerAccessor) replacementTracker)
+                            .ae2cr$setElapsedTime(ae2cr$recoveryElapsedTime);
+                }
                 RecoveryDiagnostics.record("FULL_REPLAN_SUCCESS cpu=" + ae2cr$cpuPosition()
                         + " cpuName=\"" + ae2cr$cpuName() + "\""
                         + " finalOutput=" + adjustedPlan.finalOutput()
                         + " patterns=" + adjustedPlan.patternTimes().size()
+                        + " preservedElapsedNanos=" + ae2cr$recoveryElapsedTime
                         + " retainedCpuInventory=" + ae2cr$describeCounter(inventory.list, false));
                 ae2cr$retainCpuInventory = false;
                 ae2cr$recoveryJob = true;
@@ -860,6 +911,7 @@ public abstract class CraftingCpuLogicMixin {
     @Unique
     private void ae2cr$clearRecoveryState() {
         ae2cr$retainCpuInventory = false;
+        ae2cr$recoveryElapsedTime = -1;
         ae2cr$recoveryOriginalJob = null;
         ae2cr$recoveryOutput = null;
         ae2cr$recoveryAmount = 0;

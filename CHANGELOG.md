@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.4 Beta - 2026-09-14
+
+* Preserve the original craft's elapsed timer when a successful full recovery replan replaces its AE2 job.
+* Suppress AE2's expected non-empty CPU warning only while recovery intentionally resubmits against retained CPU inventory.
+* Record retained-inventory submission and preserved-timer evidence in the dedicated recovery log.
+* Record whether each replacement recovery job ultimately finished or was cancelled.
+
 ## 0.5.3 Beta - 2026-09-14
 
 * Add a common config switch and configurable delay for warning-only in-flight output alerts.

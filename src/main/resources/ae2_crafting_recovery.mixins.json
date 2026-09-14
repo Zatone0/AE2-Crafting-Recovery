@@ -9,6 +9,7 @@
     "CraftingCalculationAccessor",
     "CraftingCpuLogicMixin",
     "CraftingTreeNodeMixin",
+    "ElapsedTimeTrackerAccessor",
     "ExecutingCraftingJobAccessor",
     "ExecutingCraftingJobPatternArchiveMixin",
     "NetworkCraftingSimulationStateAccessor",
