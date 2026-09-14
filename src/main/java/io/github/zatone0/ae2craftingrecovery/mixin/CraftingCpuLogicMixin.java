@@ -374,9 +374,14 @@ public abstract class CraftingCpuLogicMixin {
             // Prefer a fresh plan for the entire unfinished request. This lets AE2
             // reorder the dependency graph around everything already retained by the
             // CPU instead of unlocking a very large craft one operation at a time.
-            if (ae2cr$tryFullRecalculate(jobView)) {
+            if (!ae2cr$recoveryJob && ae2cr$tryFullRecalculate(jobView)) {
                 topUp = TopUpOutcome.RECALCULATING;
             } else {
+                if (ae2cr$recoveryJob) {
+                    RecoveryDiagnostics.record("FULL_REPLAN_SKIPPED_ALREADY_RECOVERED cpu=" + ae2cr$cpuPosition()
+                            + " output=" + jobView.ae2cr$getFinalOutput()
+                            + " reason=avoid-single-step-replan");
+                }
                 topUp = ae2cr$tryTransactionalTopUp(tasks, jobView);
                 if (topUp == TopUpOutcome.UNAVAILABLE && ae2cr$tryRecalculate(jobView)) {
                     topUp = TopUpOutcome.RECALCULATING;

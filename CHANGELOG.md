@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.6 Beta - 2026-09-14
+
+* Run a full AE2 replan only once for a recovered job instead of repeatedly accepting plans that unlock a single recursive chemistry operation.
+* Use the transactional batch top-up planner for later proven deadlocks in that recovered job, allowing one recovery action to unlock up to 64 operations when stock permits.
+
 ## 0.5.5 Beta - 2026-09-14
 
 * Apply successful full recovery plans to the existing AE2 job instead of cancelling and submitting a detached standalone replacement.
