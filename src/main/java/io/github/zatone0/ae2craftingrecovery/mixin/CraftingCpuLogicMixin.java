@@ -28,7 +28,6 @@ import appeng.api.networking.crafting.ICraftingProvider;
 import appeng.api.networking.crafting.ICraftingRequester;
 import appeng.api.networking.crafting.ICraftingSimulationRequester;
 import appeng.api.networking.crafting.ICraftingSubmitResult;
-import appeng.api.networking.crafting.CraftingSubmitErrorCode;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.security.IActionSource;
 import appeng.api.stacks.AEKey;
@@ -39,7 +38,6 @@ import appeng.crafting.execution.CraftingCpuLogic;
 import appeng.crafting.execution.ElapsedTimeTracker;
 import appeng.crafting.execution.ExecutingCraftingJob;
 import appeng.crafting.inv.ListCraftingInventory;
-import appeng.core.AELog;
 import appeng.me.cluster.implementations.CraftingCPUCluster;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ClickEvent;
@@ -59,6 +57,7 @@ import io.github.zatone0.ae2craftingrecovery.notification.PendingPlayerAlerts;
 import io.github.zatone0.ae2craftingrecovery.notification.DelayedOutputWarningTracker;
 import io.github.zatone0.ae2craftingrecovery.recovery.DeadlockTopUpPlanner;
 import io.github.zatone0.ae2craftingrecovery.recovery.ExecutingCraftingJobPatternArchive;
+import io.github.zatone0.ae2craftingrecovery.recovery.ExecutingCraftingJobReplacementFactory;
 import io.github.zatone0.ae2craftingrecovery.recovery.RetainedInventoryCraftingRequester;
 import io.github.zatone0.ae2craftingrecovery.recovery.CpuInventoryCraftingPlan;
 import io.github.zatone0.ae2craftingrecovery.recovery.TopUpOutcome;
@@ -97,12 +96,6 @@ public abstract class CraftingCpuLogicMixin {
 
     @Unique
     private Integer ae2cr$recoveryPlayerId;
-
-    @Unique
-    private boolean ae2cr$retainCpuInventory;
-
-    @Unique
-    private long ae2cr$recoveryElapsedTime = -1;
 
     @Unique
     private AEKey ae2cr$recoveryOutput;
@@ -190,19 +183,6 @@ public abstract class CraftingCpuLogicMixin {
         }
     }
 
-    @Redirect(
-            method = "trySubmitJob",
-            at = @At(value = "INVOKE", target = "Lappeng/core/AELog;warn(Ljava/lang/String;[Ljava/lang/Object;)V"))
-    private void ae2cr$suppressExpectedRetainedInventoryWarning(String message, Object[] args) {
-        if (ae2cr$retainCpuInventory) {
-            RecoveryDiagnostics.record("EXPECTED_NONEMPTY_CPU_SUBMISSION cpu=" + ae2cr$cpuPosition()
-                    + " cpuName=\"" + ae2cr$cpuName() + "\""
-                    + " retainedCpuInventory=" + ae2cr$describeCounter(inventory.list, false));
-            return;
-        }
-        AELog.warn(message, args);
-    }
-
     @Inject(method = "finishJob", at = @At("HEAD"))
     private void ae2cr$recordRecoveryJobCompletion(boolean completed, CallbackInfo ci) {
         if (!ae2cr$recoveryJob || job == null) {
@@ -216,23 +196,8 @@ public abstract class CraftingCpuLogicMixin {
                 + " cpuName=\"" + ae2cr$cpuName() + "\""
                 + " finalOutput=" + jobView.ae2cr$getFinalOutput()
                 + " remainingAmount=" + jobView.ae2cr$getRemainingAmount()
-                + " elapsedNanos=" + (tracker == null ? -1 : tracker.getElapsedTime())
-                + " retainedForAnotherReplan=" + ae2cr$retainCpuInventory);
-
-        // A recovery-driven cancellation immediately replaces this job and remains
-        // a recovery job. Completion or an external cancellation ends that lineage.
-        if (completed || !ae2cr$retainCpuInventory) {
-            ae2cr$recoveryJob = false;
-        }
-    }
-
-    @Redirect(
-            method = { "finishJob", "tickCraftingLogic" },
-            at = @At(value = "INVOKE", target = "Lappeng/crafting/execution/CraftingCpuLogic;storeItems()V"))
-    private void ae2cr$retainInventoryDuringRecovery(CraftingCpuLogic logic) {
-        if (!ae2cr$retainCpuInventory) {
-            logic.storeItems();
-        }
+                + " elapsedNanos=" + (tracker == null ? -1 : tracker.getElapsedTime()));
+        ae2cr$recoveryJob = false;
     }
 
     @Inject(method = "tickCraftingLogic", at = @At("HEAD"))
@@ -288,74 +253,51 @@ public abstract class CraftingCpuLogicMixin {
                 return;
             }
 
-            // Preflight succeeded. Only now replace the original job, retaining its
-            // physical inventory across cancellation and submission.
-            if (job != null) {
-                ElapsedTimeTracker tracker = ((CraftingCpuLogic) (Object) this).getElapsedTimeTracker();
-                if (tracker != null) {
-                    ae2cr$recoveryElapsedTime = tracker.getElapsedTime();
-                }
-                ae2cr$retainCpuInventory = true;
-                ((CraftingCpuLogic) (Object) this).cancel();
-            }
-
             var recoveryPlayer = ae2cr$getConnectedPlayer(ae2cr$recoveryPlayerId);
             IActionSource submissionSource = recoveryPlayer == null
                     ? cluster.getSrc()
                     : IActionSource.ofPlayer(recoveryPlayer);
-            var result = cluster.getGrid().getCraftingService()
-                    .submitJob(adjustedPlan, null, cluster, false, submissionSource);
-            if (result.successful()) {
-                Integer recoveryPlayerId = ae2cr$recoveryPlayerId;
-                ElapsedTimeTracker replacementTracker = ((CraftingCpuLogic) (Object) this).getElapsedTimeTracker();
-                if (replacementTracker != null && ae2cr$recoveryElapsedTime >= 0) {
-                    ((ElapsedTimeTrackerAccessor) replacementTracker)
-                            .ae2cr$setElapsedTime(ae2cr$recoveryElapsedTime);
-                }
-                RecoveryDiagnostics.record("FULL_REPLAN_SUCCESS cpu=" + ae2cr$cpuPosition()
-                        + " cpuName=\"" + ae2cr$cpuName() + "\""
-                        + " finalOutput=" + adjustedPlan.finalOutput()
-                        + " patterns=" + adjustedPlan.patternTimes().size()
-                        + " preservedElapsedNanos=" + ae2cr$recoveryElapsedTime
-                        + " retainedCpuInventory=" + ae2cr$describeCounter(inventory.list, false));
-                ae2cr$retainCpuInventory = false;
-                ae2cr$recoveryJob = true;
-                ae2cr$recoveryOriginalJob = null;
-                ae2cr$attemptedFullReplanFingerprint = Long.MIN_VALUE;
-                ae2cr$deadlockPasses = 0;
-                AE2CraftingRecovery.LOGGER.warn(
-                        "AE2 recovery recalculation resubmitted standalone job at CPU {}: finalOutput={}",
-                        cluster.getBoundsMin(), adjustedPlan.finalOutput());
-                ae2cr$alertPlayer(recoveryPlayerId,
-                        Component.literal("AE2 recovery replanned the stalled craft at CPU ")
-                        .withStyle(ChatFormatting.GREEN)
-                        .append(Component.literal(ae2cr$cpuLabel()).withStyle(ChatFormatting.YELLOW)));
-                ae2cr$clearRecoveryState();
-            } else {
-                if (result.errorCode() == CraftingSubmitErrorCode.MISSING_INGREDIENT
-                        && ae2cr$recalculationAttempts < 3) {
+            var missingInitialItem = CraftingCpuHelper.tryExtractInitialItems(
+                    adjustedPlan, cluster.getGrid(), inventory, submissionSource);
+            if (missingInitialItem != null) {
+                RecoveryDiagnostics.record("IN_PLACE_REPLAN_EXTRACTION_FAILED cpu=" + ae2cr$cpuPosition()
+                        + " missing=" + missingInitialItem
+                        + " attempt=" + ae2cr$recalculationAttempts);
+                if (ae2cr$recalculationAttempts < 3) {
                     AE2CraftingRecovery.LOGGER.warn(
-                            "AE2 recovery submission lost an ingredient at CPU {}; recalculating again ({}/3)",
+                            "AE2 recovery in-place replan lost an ingredient at CPU {}; recalculating again ({}/3)",
                             cluster.getBoundsMin(), ae2cr$recalculationAttempts + 1);
-                    // Cancellation has already detached the old job, but its contents
-                    // are still physically reserved in this CPU. Recalculate from that
-                    // retained snapshot without requiring the old job object to exist.
-                    ae2cr$recoveryOriginalJob = null;
                     ae2cr$beginRecoveryCalculation();
                     return;
                 }
-                ae2cr$retainCpuInventory = false;
-                ae2cr$recoveryOriginalJob = null;
-                ((CraftingCpuLogic) (Object) this).storeItems();
                 AE2CraftingRecovery.LOGGER.error(
-                        "AE2 recovery recalculation could not be resubmitted at CPU {}: error={}, detail={}",
-                        cluster.getBoundsMin(), result.errorCode(), result.errorDetail());
-                ae2cr$alertPlayer(ae2cr$recoveryPlayerId,
-                        Component.literal("AE2 recovery could not resubmit the stalled craft at CPU ")
-                        .withStyle(ChatFormatting.RED)
-                        .append(Component.literal(ae2cr$cpuLabel()).withStyle(ChatFormatting.YELLOW)));
+                        "AE2 recovery in-place replan could not reserve {} at CPU {}",
+                        missingInitialItem, cluster.getBoundsMin());
                 ae2cr$clearRecoveryState();
+                ae2cr$lastReportedJob = null;
+                return;
             }
+
+            Integer recoveryPlayerId = ae2cr$recoveryPlayerId;
+            ae2cr$applyPlanToExistingJob(adjustedPlan);
+            RecoveryDiagnostics.record("FULL_REPLAN_SUCCESS cpu=" + ae2cr$cpuPosition()
+                    + " cpuName=\"" + ae2cr$cpuName() + "\""
+                    + " finalOutput=" + adjustedPlan.finalOutput()
+                    + " patterns=" + adjustedPlan.patternTimes().size()
+                    + " ownershipPreserved=true"
+                    + " retainedCpuInventory=" + ae2cr$describeCounter(inventory.list, false));
+            ae2cr$recoveryJob = true;
+            ae2cr$recoveryOriginalJob = null;
+            ae2cr$attemptedFullReplanFingerprint = Long.MIN_VALUE;
+            ae2cr$deadlockPasses = 0;
+            AE2CraftingRecovery.LOGGER.warn(
+                    "AE2 recovery recalculation replaced the task plan in place at CPU {}: finalOutput={}",
+                    cluster.getBoundsMin(), adjustedPlan.finalOutput());
+            ae2cr$alertPlayer(recoveryPlayerId,
+                    Component.literal("AE2 recovery replanned the stalled craft at CPU ")
+                    .withStyle(ChatFormatting.GREEN)
+                    .append(Component.literal(ae2cr$cpuLabel()).withStyle(ChatFormatting.YELLOW)));
+            ae2cr$clearRecoveryState();
         } catch (Exception e) {
             Integer recoveryPlayerId = ae2cr$recoveryPlayerId;
             ae2cr$recalculation = null;
@@ -909,9 +851,35 @@ public abstract class CraftingCpuLogicMixin {
     }
 
     @Unique
+    private void ae2cr$applyPlanToExistingJob(ICraftingPlan plan) {
+        if (job == null) {
+            throw new IllegalStateException("Cannot replace a recovery plan without an active AE2 job");
+        }
+
+        var oldJobView = (ExecutingCraftingJobAccessor) job;
+        long elapsedTime = ((CraftingCpuLogic) (Object) this).getElapsedTimeTracker().getElapsedTime();
+        var replacement = ExecutingCraftingJobReplacementFactory.create(
+                plan,
+                (CraftingCpuLogic) (Object) this,
+                oldJobView.ae2cr$getLink(),
+                oldJobView.ae2cr$getPlayerId());
+
+        ((ElapsedTimeTrackerAccessor) ((ExecutingCraftingJobAccessor) replacement).ae2cr$getTimeTracker())
+                .ae2cr$setElapsedTime(elapsedTime);
+        var definitions = plan.patternTimes().keySet().stream()
+                .map(IPatternDetails::getDefinition)
+                .collect(Collectors.toSet());
+        ((ExecutingCraftingJobPatternArchive) replacement).ae2cr$setOriginalPatternDefinitions(definitions);
+
+        // This is the ownership-preserving transition: the original job is never
+        // cancelled, its CraftingLink is reused, and the CPU inventory is untouched.
+        job = replacement;
+        cluster.updateOutput(plan.finalOutput());
+        cluster.markDirty();
+    }
+
+    @Unique
     private void ae2cr$clearRecoveryState() {
-        ae2cr$retainCpuInventory = false;
-        ae2cr$recoveryElapsedTime = -1;
         ae2cr$recoveryOriginalJob = null;
         ae2cr$recoveryOutput = null;
         ae2cr$recoveryAmount = 0;

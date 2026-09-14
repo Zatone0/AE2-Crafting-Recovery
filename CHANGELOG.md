@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.5 Beta - 2026-09-14
+
+* Apply successful full recovery plans to the existing AE2 job instead of cancelling and submitting a detached standalone replacement.
+* Preserve the original crafting link, ME requester ownership, CPU assignment, and elapsed timer across recovery.
+* Prevent requesters from interpreting recovery as cancellation and immediately opening a duplicate craft.
+
 ## 0.5.4 Beta - 2026-09-14
 
 * Preserve the original craft's elapsed timer when a successful full recovery replan replaces its AE2 job.
