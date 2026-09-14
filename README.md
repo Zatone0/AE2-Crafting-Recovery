@@ -12,7 +12,9 @@ After twenty consecutive dispatch passes with no runnable pattern and no legitim
 2. **Transactional top-up.** If a full plan cannot be executed, one completely available input set is moved from ME storage into the existing CPU. Extraction is simulated first and rolled back on a race.
 3. **Seed subplan.** If the required input must itself be crafted, AE2 calculates that smaller dependency and merges its patterns into the existing task ledger without cancelling the original job.
 
-Exact returned outputs that were routed into general ME storage are reclaimed through the CPU's normal insertion path. An unchanged expected output is treated as missing only after five minutes, allowing long-running machines to finish normally.
+Any expected machine output still in flight is an absolute recovery barrier, regardless of age. After ten minutes the owner receives a warning, but the mod does not replan, top up, reclaim, or replace delayed output work. This prevents slow, fuel-starved, paused, or externally gated machines from causing duplicate production.
+
+Newly submitted jobs preserve their complete original pattern route through world saves and restarts. Recovery calculations use that archive rather than AE2's shrinking remaining-task list. If the craft owner is offline when an alert occurs, the server stores a capped, deduplicated message and delivers it when that player next logs in.
 
 ## Diagnostics
 
@@ -43,3 +45,5 @@ The jar is written to `build/libs/`.
 ## License
 
 MIT
+
+Project artwork has [separate attribution and terms](artwork/README.md).
