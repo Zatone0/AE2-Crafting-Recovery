@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3 Beta - 2026-09-14
+
+* Add a common config switch and configurable delay for warning-only in-flight output alerts.
+* Group repeated player warnings for the same delayed output and craft owner while retaining every affected CPU in the dedicated diagnostic log.
+* Clarify that delayed-output coordinates identify the crafting CPU, not the pattern provider.
+* Prefer configured crafting CPU names in player alerts, falling back to coordinates for unnamed CPUs.
+* Record successful full replacement replans explicitly in the dedicated recovery log.
+
 ## 0.5.2 Beta - 2026-09-14
 
 * Give recovery calculations the crafting CPU's grid node so AE2 can enumerate and build the archived pattern route instead of returning a zero-pattern simulation.

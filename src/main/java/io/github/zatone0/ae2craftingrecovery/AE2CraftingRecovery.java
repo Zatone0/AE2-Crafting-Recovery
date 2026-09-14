@@ -8,10 +8,13 @@ import net.minecraft.network.chat.Component;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
 import org.slf4j.Logger;
 
 import io.github.zatone0.ae2craftingrecovery.compat.ExpandedAeHighlightCompat;
+import io.github.zatone0.ae2craftingrecovery.config.RecoveryConfig;
 import io.github.zatone0.ae2craftingrecovery.notification.PendingPlayerAlerts;
 
 @Mod(AE2CraftingRecovery.MOD_ID)
@@ -20,6 +23,7 @@ public final class AE2CraftingRecovery {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public AE2CraftingRecovery() {
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, RecoveryConfig.SPEC);
         MinecraftForge.EVENT_BUS.addListener(this::registerCommands);
         MinecraftForge.EVENT_BUS.addListener(this::onPlayerLogin);
         LOGGER.info("AE2 Crafting Recovery diagnostic detector enabled");

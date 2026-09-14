@@ -49,10 +49,12 @@ import net.minecraft.sounds.SoundSource;
 import io.github.zatone0.ae2craftingrecovery.AE2CraftingRecovery;
 import io.github.zatone0.ae2craftingrecovery.compat.ExpandedAeHighlightCompat;
 import io.github.zatone0.ae2craftingrecovery.compat.ExpandedAeHighlightCompat.ProviderLocation;
+import io.github.zatone0.ae2craftingrecovery.config.RecoveryConfig;
 import io.github.zatone0.ae2craftingrecovery.diagnostic.DeadlockGraphAnalyzer;
 import io.github.zatone0.ae2craftingrecovery.diagnostic.PatternBlockage;
 import io.github.zatone0.ae2craftingrecovery.diagnostic.RecoveryDiagnostics;
 import io.github.zatone0.ae2craftingrecovery.notification.PendingPlayerAlerts;
+import io.github.zatone0.ae2craftingrecovery.notification.DelayedOutputWarningTracker;
 import io.github.zatone0.ae2craftingrecovery.recovery.DeadlockTopUpPlanner;
 import io.github.zatone0.ae2craftingrecovery.recovery.ExecutingCraftingJobPatternArchive;
 import io.github.zatone0.ae2craftingrecovery.recovery.RetainedInventoryCraftingRequester;
@@ -260,6 +262,11 @@ public abstract class CraftingCpuLogicMixin {
                     .submitJob(adjustedPlan, null, cluster, false, submissionSource);
             if (result.successful()) {
                 Integer recoveryPlayerId = ae2cr$recoveryPlayerId;
+                RecoveryDiagnostics.record("FULL_REPLAN_SUCCESS cpu=" + ae2cr$cpuPosition()
+                        + " cpuName=\"" + ae2cr$cpuName() + "\""
+                        + " finalOutput=" + adjustedPlan.finalOutput()
+                        + " patterns=" + adjustedPlan.patternTimes().size()
+                        + " retainedCpuInventory=" + ae2cr$describeCounter(inventory.list, false));
                 ae2cr$retainCpuInventory = false;
                 ae2cr$recoveryJob = true;
                 ae2cr$recoveryOriginalJob = null;
@@ -271,7 +278,7 @@ public abstract class CraftingCpuLogicMixin {
                 ae2cr$alertPlayer(recoveryPlayerId,
                         Component.literal("AE2 recovery replanned the stalled craft at CPU ")
                         .withStyle(ChatFormatting.GREEN)
-                        .append(Component.literal(ae2cr$cpuPosition()).withStyle(ChatFormatting.YELLOW)));
+                        .append(Component.literal(ae2cr$cpuLabel()).withStyle(ChatFormatting.YELLOW)));
                 ae2cr$clearRecoveryState();
             } else {
                 if (result.errorCode() == CraftingSubmitErrorCode.MISSING_INGREDIENT
@@ -295,7 +302,7 @@ public abstract class CraftingCpuLogicMixin {
                 ae2cr$alertPlayer(ae2cr$recoveryPlayerId,
                         Component.literal("AE2 recovery could not resubmit the stalled craft at CPU ")
                         .withStyle(ChatFormatting.RED)
-                        .append(Component.literal(ae2cr$cpuPosition()).withStyle(ChatFormatting.YELLOW)));
+                        .append(Component.literal(ae2cr$cpuLabel()).withStyle(ChatFormatting.YELLOW)));
                 ae2cr$clearRecoveryState();
             }
         } catch (Exception e) {
@@ -307,7 +314,7 @@ public abstract class CraftingCpuLogicMixin {
             ae2cr$alertPlayer(recoveryPlayerId,
                     Component.literal("AE2 recovery failed while replanning the craft at CPU ")
                     .withStyle(ChatFormatting.RED)
-                    .append(Component.literal(ae2cr$cpuPosition()).withStyle(ChatFormatting.YELLOW)));
+                    .append(Component.literal(ae2cr$cpuLabel()).withStyle(ChatFormatting.YELLOW)));
             ae2cr$clearRecoveryState();
         }
     }
@@ -478,7 +485,7 @@ public abstract class CraftingCpuLogicMixin {
         var player = ae2cr$getConnectedPlayer(jobView.ae2cr$getPlayerId());
         var alert = Component.literal("AE2 machine/provider rejected a ready pattern at CPU ")
                 .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
-                .append(Component.literal(ae2cr$cpuPosition()).withStyle(ChatFormatting.YELLOW));
+                .append(Component.literal(ae2cr$cpuLabel()).withStyle(ChatFormatting.YELLOW));
         if (player != null && ae2cr$rejectedProviderLocationThisPass != null) {
             int token = ExpandedAeHighlightCompat.remember(player, ae2cr$rejectedProviderLocationThisPass);
             alert.append(Component.literal("; provider " + ae2cr$rejectedProviderLocationThisPass + " ")
@@ -582,6 +589,9 @@ public abstract class CraftingCpuLogicMixin {
 
     @Unique
     private void ae2cr$monitorWaitingOutputs(ExecutingCraftingJobAccessor jobView) {
+        if (!RecoveryConfig.DELAYED_OUTPUT_WARNINGS.get()) {
+            return;
+        }
         var waiting = jobView.ae2cr$getWaitingFor().list;
         if (ae2cr$waitingWarningJob != job) {
             ae2cr$waitingWarningJob = job;
@@ -601,8 +611,8 @@ public abstract class CraftingCpuLogicMixin {
         ae2cr$waitingStablePasses++;
 
         // Duration alone is diagnostic evidence, never recovery authority. Warn once
-        // per output key for this job after ten minutes of an unchanged waiting set.
-        if (ae2cr$waitingStablePasses >= 12_000) {
+        // per output key for this job after the configured unchanged-wait duration.
+        if (ae2cr$waitingStablePasses >= RecoveryConfig.delayedOutputWarningTicks()) {
             for (var entry : waiting) {
                 if (!ae2cr$warnedWaitingOutputs.add(entry.getKey())) {
                     continue;
@@ -612,15 +622,26 @@ public abstract class CraftingCpuLogicMixin {
                         + " delayedKey=" + entry.getKey()
                         + " delayedAmount=" + entry.getLongValue()
                         + " waiting=" + ae2cr$describeCounter(waiting, true));
+                boolean grouped = RecoveryConfig.GROUP_REPEATED_DELAYED_OUTPUTS.get()
+                        && !DelayedOutputWarningTracker.shouldNotify(
+                                jobView.ae2cr$getPlayerId(), entry.getKey(), cluster.getLevel().getGameTime(),
+                                RecoveryConfig.repeatedOutputGroupTicks());
+                if (grouped) {
+                    RecoveryDiagnostics.record("WAITING_OUTPUT_DELAYED_GROUPED cpu=" + ae2cr$cpuPosition()
+                            + " delayedKey=" + entry.getKey()
+                            + " playerId=" + jobView.ae2cr$getPlayerId());
+                    continue;
+                }
+                int delayMinutes = RecoveryConfig.DELAYED_OUTPUT_WARNING_MINUTES.get();
                 AE2CraftingRecovery.LOGGER.warn(
-                        "AE2 craft has waited at least ten minutes for {}x {} at CPU {}; warning only, no recovery work was submitted",
-                        entry.getLongValue(), entry.getKey(), cluster.getBoundsMin());
+                        "AE2 crafting CPU {} has waited at least {} minutes for {}x {}; warning only, no recovery work was submitted",
+                        cluster.getBoundsMin(), delayMinutes, entry.getLongValue(), entry.getKey());
                 ae2cr$alertPlayer(jobView.ae2cr$getPlayerId(),
-                        Component.literal("AE2 craft has waited over 10 minutes for ")
+                        Component.literal("AE2 crafting CPU " + ae2cr$cpuLabel()
+                                + " has waited over " + delayMinutes + " minutes for ")
                                 .withStyle(ChatFormatting.GOLD)
                                 .append(entry.getKey().getDisplayName().copy().withStyle(ChatFormatting.YELLOW))
-                                .append(Component.literal(" at CPU " + ae2cr$cpuPosition()
-                                        + ". Is this machine stalled?")
+                                .append(Component.literal(". Is its machine stalled or sharing a busy provider?")
                                         .withStyle(ChatFormatting.GOLD)));
             }
         }
@@ -1046,7 +1067,7 @@ public abstract class CraftingCpuLogicMixin {
             ae2cr$alertPlayer(jobView.ae2cr$getPlayerId(), Component.literal("AE2 craft stalled: ")
                     .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
                     .append(outputName)
-                    .append(Component.literal(" at CPU " + ae2cr$cpuPosition()).withStyle(ChatFormatting.YELLOW)));
+                    .append(Component.literal(" at CPU " + ae2cr$cpuLabel()).withStyle(ChatFormatting.YELLOW)));
             ae2cr$playAlertSound(jobView.ae2cr$getPlayerId());
         }
     }
@@ -1055,6 +1076,18 @@ public abstract class CraftingCpuLogicMixin {
     private String ae2cr$cpuPosition() {
         var pos = cluster.getBoundsMin();
         return pos.getX() + ", " + pos.getY() + ", " + pos.getZ();
+    }
+
+    @Unique
+    private String ae2cr$cpuLabel() {
+        String name = ae2cr$cpuName();
+        return name.isEmpty() ? ae2cr$cpuPosition() : "\"" + name + "\"";
+    }
+
+    @Unique
+    private String ae2cr$cpuName() {
+        var component = cluster.getName();
+        return component == null ? "" : component.getString().trim();
     }
 
     @Unique
