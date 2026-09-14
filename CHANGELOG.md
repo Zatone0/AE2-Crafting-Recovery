@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 Beta - 2026-09-13
+
+* Move the crafting-job archive interface outside the reserved Mixin package, fixing the dedicated-server `IllegalClassLoadError` when AE2 CPUs load saved jobs.
+
 ## 0.5.0 Beta - 2026-09-13
 
 * Archive every pattern definition from the original submitted plan inside the crafting job and preserve it through world saves and restarts.

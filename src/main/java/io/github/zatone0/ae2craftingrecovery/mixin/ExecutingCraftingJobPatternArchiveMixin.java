@@ -22,6 +22,8 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 
+import io.github.zatone0.ae2craftingrecovery.recovery.ExecutingCraftingJobPatternArchive;
+
 @Mixin(value = ExecutingCraftingJob.class, remap = false)
 public abstract class ExecutingCraftingJobPatternArchiveMixin implements ExecutingCraftingJobPatternArchive {
     @Unique

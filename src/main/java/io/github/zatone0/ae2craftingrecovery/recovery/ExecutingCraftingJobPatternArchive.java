@@ -1,4 +1,4 @@
-package io.github.zatone0.ae2craftingrecovery.mixin;
+package io.github.zatone0.ae2craftingrecovery.recovery;
 
 import java.util.Collection;
 import java.util.Set;

@@ -54,6 +54,7 @@ import io.github.zatone0.ae2craftingrecovery.diagnostic.PatternBlockage;
 import io.github.zatone0.ae2craftingrecovery.diagnostic.RecoveryDiagnostics;
 import io.github.zatone0.ae2craftingrecovery.notification.PendingPlayerAlerts;
 import io.github.zatone0.ae2craftingrecovery.recovery.DeadlockTopUpPlanner;
+import io.github.zatone0.ae2craftingrecovery.recovery.ExecutingCraftingJobPatternArchive;
 import io.github.zatone0.ae2craftingrecovery.recovery.RetainedInventoryCraftingRequester;
 import io.github.zatone0.ae2craftingrecovery.recovery.CpuInventoryCraftingPlan;
 import io.github.zatone0.ae2craftingrecovery.recovery.TopUpOutcome;
