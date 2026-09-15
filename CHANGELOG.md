@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.7 Beta - 2026-09-14
+
+* Raise the bounded transactional recovery batch from 64 to 2,048 operations for very large stalled crafts.
+* Prefer the safe candidate that unlocks the largest runnable block instead of the candidate with the smallest absolute input bundle.
+
 ## 0.5.6 Beta - 2026-09-14
 
 * Run a full AE2 replan only once for a recovered job instead of repeatedly accepting plans that unlock a single recursive chemistry operation.

@@ -20,7 +20,7 @@ import net.minecraft.world.level.Level;
 
 /** Finds a blocked pattern that can be made runnable from network stock in a bounded batch. */
 public final class DeadlockTopUpPlanner {
-    private static final long MAX_BATCH_OPERATIONS = 64;
+    private static final long MAX_BATCH_OPERATIONS = 2048;
 
     private DeadlockTopUpPlanner() {
     }
@@ -39,7 +39,8 @@ public final class DeadlockTopUpPlanner {
         return candidates.stream()
                 .filter(candidate -> !excludedSignatures.contains(candidate.signature()))
                 .min(Comparator
-                .comparingInt((Candidate c) -> c.missing().size())
+                .comparingLong(Candidate::batchOperations).reversed()
+                .thenComparingInt(c -> c.missing().size())
                 .thenComparingLong(Candidate::totalMissing)
                 .thenComparing(Comparator.comparingLong(Candidate::remainingOperations).reversed()));
     }
