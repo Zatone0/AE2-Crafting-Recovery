@@ -37,10 +37,10 @@ This release targets the AE2 Supergiant 15.5.3-uelm execution internals. Other A
 Use JDK 21 and the included Gradle wrapper:
 
 ```text
-./gradlew clean build --no-configuration-cache
+./gradlew clean build --no-configuration-cache -Pae2_local_jar=/path/to/appliedenergistics2-forge-15.5.3-uelm.jar
 ```
 
-The jar is written to `build/libs/`.
+The AE2 JAR must be the official UELM 15.5.3 release. CI downloads that release from its GitHub repository and verifies its SHA-256 before building. The recovery jar is written to `build/libs/`.
 
 ## License
 

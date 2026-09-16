@@ -6,3 +6,5 @@ out/
 *.iml
 *.log
 ae2-inspect.jar
+__pycache__/
+*.pyc
