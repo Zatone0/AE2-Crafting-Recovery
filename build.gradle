@@ -40,7 +40,11 @@ repositories {
 }
 
 dependencies {
-    modImplementation("appeng:appliedenergistics2-forge:${ae2_version}") { transitive = false }
+    if (providers.gradleProperty("ae2_local_jar").isPresent()) {
+        implementation(files(providers.gradleProperty("ae2_local_jar").get()))
+    } else {
+        modImplementation("appeng:appliedenergistics2-forge:${ae2_version}") { transitive = false }
+    }
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 }
 

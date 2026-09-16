@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 Beta - 2026-09-15
+
+* Update the build and declared dependency range for AE2 Supergiant 15.5.3-uelm.
+* Treat Supergiant forced-start pending external inputs as intentional waits, never as deadlocks eligible for recovery injection.
+* Move submission archiving to Supergiant's new submission-mode endpoint so normal and forced-start jobs are recorded exactly once.
+* Support an optional local AE2 development JAR for reproducible compatibility builds of fork-only versions.
+
 ## 0.5.7 Beta - 2026-09-14
 
 * Raise the bounded transactional recovery batch from 64 to 2,048 operations for very large stalled crafts.

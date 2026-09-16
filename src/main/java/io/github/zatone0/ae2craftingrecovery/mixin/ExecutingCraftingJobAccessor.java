@@ -23,6 +23,9 @@ public interface ExecutingCraftingJobAccessor {
     @Accessor("waitingFor")
     ListCraftingInventory ae2cr$getWaitingFor();
 
+    @Accessor("pendingExternalInputs")
+    ListCraftingInventory ae2cr$getPendingExternalInputs();
+
     @Accessor("finalOutput")
     GenericStack ae2cr$getFinalOutput();
 

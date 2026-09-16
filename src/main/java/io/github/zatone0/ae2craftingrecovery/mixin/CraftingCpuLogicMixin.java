@@ -35,6 +35,7 @@ import appeng.api.stacks.GenericStack;
 import appeng.api.stacks.KeyCounter;
 import appeng.crafting.execution.CraftingCpuHelper;
 import appeng.crafting.execution.CraftingCpuLogic;
+import appeng.crafting.execution.CraftingSubmitMode;
 import appeng.crafting.execution.ElapsedTimeTracker;
 import appeng.crafting.execution.ExecutingCraftingJob;
 import appeng.crafting.inv.ListCraftingInventory;
@@ -169,9 +170,12 @@ public abstract class CraftingCpuLogicMixin {
     @Unique
     private long ae2cr$alertedProviderRejectionFingerprint = Long.MIN_VALUE;
 
-    @Inject(method = "trySubmitJob", at = @At("RETURN"))
+    @Inject(
+            method = "trySubmitJob(Lappeng/api/networking/IGrid;Lappeng/api/networking/crafting/ICraftingPlan;Lappeng/api/networking/security/IActionSource;Lappeng/api/networking/crafting/ICraftingRequester;Lappeng/crafting/execution/CraftingSubmitMode;)Lappeng/api/networking/crafting/ICraftingSubmitResult;",
+            at = @At("RETURN"))
     private void ae2cr$archiveSubmittedPlan(IGrid grid, ICraftingPlan plan, IActionSource source,
-            ICraftingRequester requester, CallbackInfoReturnable<ICraftingSubmitResult> cir) {
+            ICraftingRequester requester, CraftingSubmitMode submitMode,
+            CallbackInfoReturnable<ICraftingSubmitResult> cir) {
         if (cir.getReturnValue().successful() && job != null) {
             var definitions = plan.patternTimes().keySet().stream()
                     .map(IPatternDetails::getDefinition)
@@ -341,6 +345,14 @@ public abstract class CraftingCpuLogicMixin {
             // duration cannot prove that the work was lost: a machine may be slow,
             // starved of fuel, paused, or otherwise externally gated. Never submit
             // replacement work or top-ups while any output is still in flight.
+            return;
+        }
+        if (ae2cr$hasPositiveEntries(jobView.ae2cr$getPendingExternalInputs().list)) {
+            // Supergiant's forced-start mode deliberately leaves these inputs pending.
+            // They are not evidence of a dependency deadlock and must not trigger
+            // recovery injection or replacement planning.
+            ae2cr$deadlockPasses = 0;
+            ae2cr$resetProviderRejectionTracking();
             return;
         }
         ae2cr$waitingStablePasses = 0;
