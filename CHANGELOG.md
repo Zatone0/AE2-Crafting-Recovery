@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1 Beta - 2026-09-16
+
+* Add a **Recalculate** button beside UELM's Suspend and Cancel controls in the crafting CPU window.
+* Route manual recalculation through AE2's server-authoritative menu action system.
+* Preserve requester ownership, CPU inventory, CPU assignment, and elapsed time by reusing the in-place full-replan path.
+* Temporarily stop new pattern pushes during manual recalculation without persisting AE2's suspended state.
+* Treat already-dispatched machine outputs as reserved future stock and transfer their waiting ledger to the replacement plan.
+* Refuse manual recalculation while forced-start external inputs are outstanding.
+* Record manual requests and refusal reasons in the recovery diagnostic log and show immediate feedback to the requesting player.
+
 ## 0.6.0 Beta - 2026-09-15
 
 * Update the build and declared dependency range for AE2 Supergiant 15.5.3-uelm.

@@ -16,6 +16,8 @@ Any expected machine output still in flight is an absolute recovery barrier, reg
 
 Newly submitted jobs preserve their complete original pattern route through world saves and restarts. Recovery calculations use that archive rather than AE2's shrinking remaining-task list. If the craft owner is offline when an alert occurs, the server stores a capped, deduplicated message and delivers it when that player next logs in.
 
+The crafting CPU window also provides a **Recalculate** button beside UELM's Suspend and Cancel controls. It explicitly retries the ownership-preserving full replan for the selected CPU. During that calculation, the mod temporarily stops new pattern pushes and treats already-dispatched machine outputs as reserved future stock. Their waiting ledger follows the replacement plan so returned outputs still belong to the original craft. Forced-start jobs that are waiting for external inputs remain ineligible for manual recalculation.
+
 ## Diagnostics
 
 Concise recovery messages remain in `latest.log`. Full dependency graphs, CPU inventories, preflight shortages, recovery choices, and rollback evidence are written to:

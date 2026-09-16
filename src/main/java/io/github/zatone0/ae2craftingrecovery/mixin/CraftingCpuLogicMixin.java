@@ -59,13 +59,14 @@ import io.github.zatone0.ae2craftingrecovery.notification.DelayedOutputWarningTr
 import io.github.zatone0.ae2craftingrecovery.recovery.DeadlockTopUpPlanner;
 import io.github.zatone0.ae2craftingrecovery.recovery.ExecutingCraftingJobPatternArchive;
 import io.github.zatone0.ae2craftingrecovery.recovery.ExecutingCraftingJobReplacementFactory;
+import io.github.zatone0.ae2craftingrecovery.recovery.ManualRecalculationTarget;
 import io.github.zatone0.ae2craftingrecovery.recovery.RetainedInventoryCraftingRequester;
 import io.github.zatone0.ae2craftingrecovery.recovery.CpuInventoryCraftingPlan;
 import io.github.zatone0.ae2craftingrecovery.recovery.TopUpOutcome;
 import io.github.zatone0.ae2craftingrecovery.recovery.TaskProgressFactory;
 
 @Mixin(value = CraftingCpuLogic.class, remap = false)
-public abstract class CraftingCpuLogicMixin {
+public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget {
     private static final int AE2CR_CONFIRMATION_PASSES = 20;
     private static final int AE2CR_PROVIDER_REJECTION_PASSES = 6000;
 
@@ -141,6 +142,9 @@ public abstract class CraftingCpuLogicMixin {
     private boolean ae2cr$routePreservingReplan;
 
     @Unique
+    private boolean ae2cr$manualReplan;
+
+    @Unique
     private long ae2cr$attemptedFullReplanFingerprint = Long.MIN_VALUE;
 
     @Unique
@@ -189,6 +193,13 @@ public abstract class CraftingCpuLogicMixin {
 
     @Inject(method = "finishJob", at = @At("HEAD"))
     private void ae2cr$recordRecoveryJobCompletion(boolean completed, CallbackInfo ci) {
+        if (ae2cr$manualReplan && ae2cr$recalculation != null) {
+            ae2cr$recalculation.cancel(true);
+            ae2cr$recalculation = null;
+            RecoveryDiagnostics.record("MANUAL_REPLAN_CANCELLED_WITH_JOB cpu=" + ae2cr$cpuPosition()
+                    + " completed=" + completed);
+            ae2cr$clearRecoveryState();
+        }
         if (!ae2cr$recoveryJob || job == null) {
             return;
         }
@@ -230,7 +241,8 @@ public abstract class CraftingCpuLogicMixin {
         try {
             var plan = ae2cr$recalculation.get();
             ae2cr$recalculation = null;
-            var adjustedPlan = CpuInventoryCraftingPlan.accountForCpuInventory(plan, inventory.list);
+            var retainedPlanningStock = ae2cr$retainedPlanningStock();
+            var adjustedPlan = CpuInventoryCraftingPlan.accountForCpuInventory(plan, retainedPlanningStock);
             if (adjustedPlan.simulation() || !adjustedPlan.missingItems().isEmpty()) {
                 String detailedPreflight = "PREFLIGHT_INCOMPLETE cpu=" + ae2cr$cpuPosition()
                         + " finalOutput=" + adjustedPlan.finalOutput()
@@ -242,7 +254,7 @@ public abstract class CraftingCpuLogicMixin {
                         + " missing=" + ae2cr$describeCounter(adjustedPlan.missingItems(), true)
                         + " plannedNetworkInputs=" + ae2cr$describeCounter(adjustedPlan.usedItems(), false)
                         + " plannedEmissions=" + ae2cr$describeCounter(adjustedPlan.emittedItems(), false)
-                        + " retainedCpuInventory=" + ae2cr$describeCounter(inventory.list, false);
+                        + " retainedPlanningStock=" + ae2cr$describeCounter(retainedPlanningStock, false);
                 RecoveryDiagnostics.record(detailedPreflight);
                 AE2CraftingRecovery.LOGGER.error(
                         "AE2 recovery preflight incomplete at CPU {}: finalOutput={}, patterns={}, missing={}; "
@@ -336,6 +348,12 @@ public abstract class CraftingCpuLogicMixin {
             return;
         }
 
+        if (ae2cr$manualReplan && ae2cr$recalculation != null) {
+            ae2cr$deadlockPasses = 0;
+            ae2cr$resetProviderRejectionTracking();
+            return;
+        }
+
         var jobView = (ExecutingCraftingJobAccessor) job;
         var tasks = jobView.ae2cr$getTasks();
         if (ae2cr$hasPositiveEntries(jobView.ae2cr$getWaitingFor().list)) {
@@ -408,7 +426,7 @@ public abstract class CraftingCpuLogicMixin {
         }
     }
 
-    @Inject(method = "executeCrafting", at = @At("HEAD"))
+    @Inject(method = "executeCrafting", at = @At("HEAD"), cancellable = true)
     private void ae2cr$beginProviderObservation(CallbackInfoReturnable<Integer> cir) {
         ae2cr$providerChecksThisPass = 0;
         ae2cr$busyProvidersThisPass = 0;
@@ -416,6 +434,12 @@ public abstract class CraftingCpuLogicMixin {
         ae2cr$acceptedPushesThisPass = 0;
         ae2cr$rejectedPushesThisPass.clear();
         ae2cr$rejectedProviderLocationThisPass = null;
+        if (ae2cr$manualReplan && ae2cr$recalculation != null) {
+            // This is intentionally transient instead of AE2's persisted Suspend flag.
+            // A server stop during calculation therefore cannot strand the CPU in a
+            // suspended state after the in-memory Future is lost.
+            cir.setReturnValue(0);
+        }
     }
 
     @Redirect(
@@ -739,6 +763,47 @@ public abstract class CraftingCpuLogicMixin {
         return true;
     }
 
+    @Override
+    public void ae2cr$requestManualRecalculation(net.minecraft.server.level.ServerPlayer player) {
+        if (job == null) {
+            player.sendSystemMessage(Component.literal("This crafting CPU has no active job.")
+                    .withStyle(ChatFormatting.YELLOW));
+            return;
+        }
+        if (ae2cr$recalculation != null) {
+            player.sendSystemMessage(Component.literal("This crafting CPU is already recalculating.")
+                    .withStyle(ChatFormatting.YELLOW));
+            return;
+        }
+
+        var jobView = (ExecutingCraftingJobAccessor) job;
+        if (ae2cr$hasPositiveEntries(jobView.ae2cr$getPendingExternalInputs().list)) {
+            player.sendSystemMessage(Component.literal(
+                    "Recalculation refused: this forced-start craft is waiting for external inputs.")
+                    .withStyle(ChatFormatting.GOLD));
+            RecoveryDiagnostics.record("MANUAL_REPLAN_REFUSED_EXTERNAL_INPUTS cpu=" + ae2cr$cpuPosition()
+                    + " pending=" + ae2cr$describeCounter(jobView.ae2cr$getPendingExternalInputs().list, false));
+            return;
+        }
+
+        // A manual request is an explicit retry, even if automatic recovery already
+        // attempted this exact unchanged job state.
+        ae2cr$manualReplan = true;
+        ae2cr$attemptedFullReplanFingerprint = Long.MIN_VALUE;
+        if (ae2cr$tryFullRecalculate(jobView)) {
+            player.sendSystemMessage(Component.literal("Recalculating craft on CPU " + ae2cr$cpuLabel() + "…")
+                    .withStyle(ChatFormatting.AQUA));
+            RecoveryDiagnostics.record("MANUAL_REPLAN_REQUESTED cpu=" + ae2cr$cpuPosition()
+                    + " player=" + player.getGameProfile().getName()
+                    + " assumedInFlight="
+                    + ae2cr$describeCounter(jobView.ae2cr$getWaitingFor().list, false));
+        } else {
+            ae2cr$clearRecoveryState();
+            player.sendSystemMessage(Component.literal("This craft cannot be recalculated in its current state.")
+                    .withStyle(ChatFormatting.RED));
+        }
+    }
+
     @Unique
     private void ae2cr$finishSeedCalculation() {
         var originalJob = ae2cr$recoveryOriginalJob;
@@ -874,6 +939,10 @@ public abstract class CraftingCpuLogicMixin {
         }
 
         var oldJobView = (ExecutingCraftingJobAccessor) job;
+        var outstandingOutputs = new KeyCounter();
+        if (ae2cr$manualReplan) {
+            outstandingOutputs.addAll(oldJobView.ae2cr$getWaitingFor().list);
+        }
         long elapsedTime = ((CraftingCpuLogic) (Object) this).getElapsedTimeTracker().getElapsedTime();
         var replacement = ExecutingCraftingJobReplacementFactory.create(
                 plan,
@@ -887,6 +956,14 @@ public abstract class CraftingCpuLogicMixin {
                 .map(IPatternDetails::getDefinition)
                 .collect(Collectors.toSet());
         ((ExecutingCraftingJobPatternArchive) replacement).ae2cr$setOriginalPatternDefinitions(definitions);
+        if (!outstandingOutputs.isEmpty()) {
+            var replacementWaiting = ((ExecutingCraftingJobAccessor) replacement).ae2cr$getWaitingFor();
+            for (var entry : outstandingOutputs) {
+                replacementWaiting.insert(entry.getKey(), entry.getLongValue(), Actionable.MODULATE);
+            }
+            RecoveryDiagnostics.record("MANUAL_REPLAN_IN_FLIGHT_TRANSFERRED cpu=" + ae2cr$cpuPosition()
+                    + " waiting=" + ae2cr$describeCounter(outstandingOutputs, false));
+        }
 
         // This is the ownership-preserving transition: the original job is never
         // cancelled, its CraftingLink is reused, and the CPU inventory is untouched.
@@ -903,6 +980,17 @@ public abstract class CraftingCpuLogicMixin {
         ae2cr$recalculationAttempts = 0;
         ae2cr$fullReplan = false;
         ae2cr$routePreservingReplan = false;
+        ae2cr$manualReplan = false;
+    }
+
+    @Unique
+    private KeyCounter ae2cr$retainedPlanningStock() {
+        var retained = new KeyCounter();
+        retained.addAll(inventory.list);
+        if (ae2cr$manualReplan && job != null && job == ae2cr$recoveryOriginalJob) {
+            retained.addAll(((ExecutingCraftingJobAccessor) job).ae2cr$getWaitingFor().list);
+        }
+        return retained;
     }
 
     @Unique
@@ -944,11 +1032,14 @@ public abstract class CraftingCpuLogicMixin {
             allowedPatternDefinitions = ((ExecutingCraftingJobPatternArchive) ae2cr$recoveryOriginalJob)
                     .ae2cr$getOriginalPatternDefinitions();
         }
+        var retainedPlanningStock = ae2cr$retainedPlanningStock();
         var requester = new RetainedInventoryCraftingRequester(
-                recoverySource, cluster.getNode(), inventory.list, allowedPatternDefinitions);
+                recoverySource, cluster.getNode(), retainedPlanningStock, allowedPatternDefinitions);
         RecoveryDiagnostics.record("RECOVERY_CALCULATION_REQUEST cpu=" + ae2cr$cpuPosition()
                 + " output=" + ae2cr$recoveryAmount + "x " + ae2cr$recoveryOutput
                 + " routePreserving=" + ae2cr$routePreservingReplan
+                + " manual=" + ae2cr$manualReplan
+                + " retainedPlanningStock=" + ae2cr$describeCounter(retainedPlanningStock, false)
                 + " allowedPatternDefinitions=" + requester.allowedPatternCount()
                 + " gridNodePresent=" + (requester.getGridNode() != null));
         ae2cr$recalculation = cluster.getGrid().getCraftingService().beginCraftingCalculation(

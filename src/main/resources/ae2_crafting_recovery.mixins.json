@@ -7,6 +7,7 @@
   "mixins": [
     "CraftingCalculationMixin",
     "CraftingCalculationAccessor",
+    "CraftingCpuMenuMixin",
     "CraftingCpuLogicMixin",
     "CraftingTreeNodeMixin",
     "ElapsedTimeTrackerAccessor",
