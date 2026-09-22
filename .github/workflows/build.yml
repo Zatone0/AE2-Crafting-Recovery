@@ -25,7 +25,7 @@ jobs:
         run: |
           curl --fail --location --output "$RUNNER_TEMP/ae2-uelm.jar" \
             "https://github.com/AE2-Unofficial-Extended-Life-Modern/AE2-UELM/releases/download/forge%2Fv15.5.4-uelm/appliedenergistics2-forge-15.5.4-uelm.jar"
-          echo "674fcbe1195d2e0b2a5bb0bb6feae57c47ff09c7470c4a20e33f999efeb802e7  $RUNNER_TEMP/ae2-uelm.jar" | sha256sum --check
+          echo "83d4b3026c4cda1d1feb4d3462d5cbf5e24fb523e03403ddd98ea451f88f8b90  $RUNNER_TEMP/ae2-uelm.jar" | sha256sum --check
       - name: Build
         run: ./gradlew clean build --no-configuration-cache -Pae2_local_jar="$RUNNER_TEMP/ae2-uelm.jar"
       - uses: actions/upload-artifact@v4
