@@ -22,6 +22,7 @@ base {
 
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(17)
+    withSourcesJar()
 }
 
 legacyForge {
@@ -75,5 +76,17 @@ tasks.withType(JavaCompile).configureEach {
 jar {
     manifest {
         attributes 'MixinConfigs': "${mod_id}.mixins.json"
+    }
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+tasks.withType(Jar).configureEach {
+    from('LICENSE')
+    from('licenses/CC-BY-NC-SA-3.0.txt') {
+        into 'licenses'
     }
 }

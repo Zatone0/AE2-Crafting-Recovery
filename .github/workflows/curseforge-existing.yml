@@ -1,0 +1,45 @@
+name: Upload existing release to CurseForge
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag matching the current mod version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: curseforge-existing-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os, runpy
+          release = runpy.run_path('scripts/release.py')
+          assert os.environ['RELEASE_TAG'].removeprefix('v') == release['version'](), 'Tag/version mismatch'
+          PY
+      - name: Download published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p build/release
+          gh release download "$RELEASE_TAG" --pattern '*.jar' --pattern 'SHA256SUMS.txt' --dir build/release
+          gh release view "$RELEASE_TAG" --json body --jq .body > build/release/notes.md
+      - name: Upload release
+        env:
+          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+          CURSEFORGE_PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
+        run: python3 scripts/release.py curseforge

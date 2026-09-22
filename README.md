@@ -1,6 +1,6 @@
 # AE2 Crafting Recovery
 
-Experimental crafting recovery and diagnostics for Minecraft 1.20.1, Forge 47.4.20, and Applied Energistics 2 Supergiant 15.5.3-uelm.
+Experimental crafting recovery and diagnostics for Minecraft 1.20.1, Forge 47.4.20, and Applied Energistics 2 Supergiant 15.5.4-uelm.
 
 Large AE2 jobs can plan around deterministic processing-pattern byproducts and later reach a state where every remaining operation depends on material that the same job was expected to produce. This mod distinguishes that zero-progress state from ordinary machine delay, records the blocked dependency graph, and attempts recovery without first dumping the crafting CPU's contents.
 
@@ -32,7 +32,7 @@ The diagnostic file rotates at 8 MiB and retains three older generations. Repeat
 
 Install the same jar on both the dedicated server and every connecting client. Remove older versions before starting Minecraft.
 
-This release targets the AE2 Supergiant 15.5.3-uelm execution internals. Other AE2 or Minecraft versions are not supported by this build. Back up important worlds before testing recovery on large crafts.
+This release targets the AE2 Supergiant 15.5.4-uelm execution internals. Other AE2 or Minecraft versions are not supported by this build. Back up important worlds before testing recovery on large crafts.
 
 ## Building
 
@@ -42,7 +42,7 @@ Use JDK 21 and the included Gradle wrapper:
 ./gradlew clean build --no-configuration-cache -Pae2_local_jar=/path/to/appliedenergistics2-forge-15.5.3-uelm.jar
 ```
 
-The AE2 JAR must be the official UELM 15.5.3 release. CI downloads that release from its GitHub repository and verifies its SHA-256 before building. The recovery jar is written to `build/libs/`.
+The AE2 JAR must be the official UELM 15.5.4 release. CI downloads that release from its GitHub repository and verifies its SHA-256 before building. The recovery jar is written to `build/libs/`.
 
 ## License
 

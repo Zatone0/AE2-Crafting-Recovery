@@ -21,11 +21,11 @@ jobs:
           cache: gradle
       - name: Make Gradle executable
         run: chmod +x ./gradlew
-      - name: Download AE2 UELM 15.5.3
+      - name: Download AE2 UELM 15.5.4
         run: |
           curl --fail --location --output "$RUNNER_TEMP/ae2-uelm.jar" \
-            "https://github.com/AE2-Unofficial-Extended-Life-Modern/AE2-UELM/releases/download/forge%2Fv15.5.3-uelm/appliedenergistics2-forge-15.5.3-uelm.jar"
-          echo "95f5c2c3097cfea9e13ebf3c54a48c9f43f8ff75239eb292e43878b40dc2a741  $RUNNER_TEMP/ae2-uelm.jar" | sha256sum --check
+            "https://github.com/AE2-Unofficial-Extended-Life-Modern/AE2-UELM/releases/download/forge%2Fv15.5.4-uelm/appliedenergistics2-forge-15.5.4-uelm.jar"
+          echo "674fcbe1195d2e0b2a5bb0bb6feae57c47ff09c7470c4a20e33f999efeb802e7  $RUNNER_TEMP/ae2-uelm.jar" | sha256sum --check
       - name: Build
         run: ./gradlew clean build --no-configuration-cache -Pae2_local_jar="$RUNNER_TEMP/ae2-uelm.jar"
       - uses: actions/upload-artifact@v4
