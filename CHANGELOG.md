@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2 Beta - 2026-09-23
+
+* Track each expected machine output independently so progress elsewhere in a large craft cannot indefinitely reset its delayed-output warning timer.
+* Remember the pattern provider that accepted each dispatched output and include its dimension and coordinates in delayed-output diagnostics, server warnings, and player alerts.
+* Add an ExpandedAE highlight link to delayed-output alerts when the provider location is available.
+* Use AE2's configured CPU name or its generated terminal number in recalculation messages, falling back to coordinates only when the CPU cannot be found in the grid.
+* Include the recovered craft output in successful recalculation alerts.
+
 ## 0.6.1 Beta - 2026-09-16
 
 * Add a **Recalculate** button beside UELM's Suspend and Cancel controls in the crafting CPU window.

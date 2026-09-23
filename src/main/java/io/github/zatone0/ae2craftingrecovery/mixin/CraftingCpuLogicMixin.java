@@ -23,6 +23,7 @@ import appeng.api.config.Actionable;
 import appeng.api.crafting.IPatternDetails;
 import appeng.api.features.IPlayerRegistry;
 import appeng.api.networking.crafting.CalculationStrategy;
+import appeng.api.networking.crafting.ICraftingCPU;
 import appeng.api.networking.crafting.ICraftingPlan;
 import appeng.api.networking.crafting.ICraftingProvider;
 import appeng.api.networking.crafting.ICraftingRequester;
@@ -124,16 +125,19 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
     private long ae2cr$recoveryFingerprint;
 
     @Unique
-    private long ae2cr$waitingFingerprint;
+    private final Map<AEKey, Long> ae2cr$waitingAmounts = new LinkedHashMap<>();
 
     @Unique
-    private int ae2cr$waitingStablePasses;
+    private final Map<AEKey, Long> ae2cr$waitingSince = new LinkedHashMap<>();
 
     @Unique
     private ExecutingCraftingJob ae2cr$waitingWarningJob;
 
     @Unique
     private final java.util.Set<AEKey> ae2cr$warnedWaitingOutputs = new HashSet<>();
+
+    @Unique
+    private final Map<AEKey, ProviderLocation> ae2cr$dispatchedOutputProviders = new LinkedHashMap<>();
 
     @Unique
     private boolean ae2cr$fullReplan;
@@ -181,6 +185,11 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
             ICraftingRequester requester, CraftingSubmitMode submitMode,
             CallbackInfoReturnable<ICraftingSubmitResult> cir) {
         if (cir.getReturnValue().successful() && job != null) {
+            ae2cr$waitingWarningJob = job;
+            ae2cr$waitingAmounts.clear();
+            ae2cr$waitingSince.clear();
+            ae2cr$warnedWaitingOutputs.clear();
+            ae2cr$dispatchedOutputProviders.clear();
             var definitions = plan.patternTimes().keySet().stream()
                     .map(IPatternDetails::getDefinition)
                     .collect(Collectors.toSet());
@@ -234,7 +243,7 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
             ae2cr$clearRecoveryState();
             AE2CraftingRecovery.LOGGER.warn(
                     "AE2 recovery discarded a stale calculation at CPU {} because the active job changed",
-                    cluster.getBoundsMin());
+                    ae2cr$cpuLabel());
             return;
         }
 
@@ -245,6 +254,7 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
             var adjustedPlan = CpuInventoryCraftingPlan.accountForCpuInventory(plan, retainedPlanningStock);
             if (adjustedPlan.simulation() || !adjustedPlan.missingItems().isEmpty()) {
                 String detailedPreflight = "PREFLIGHT_INCOMPLETE cpu=" + ae2cr$cpuPosition()
+                        + " cpuName=\"" + ae2cr$cpuName() + "\""
                         + " finalOutput=" + adjustedPlan.finalOutput()
                         + " simulation=" + adjustedPlan.simulation()
                         + " bytes=" + adjustedPlan.bytes()
@@ -259,7 +269,7 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
                 AE2CraftingRecovery.LOGGER.error(
                         "AE2 recovery preflight incomplete at CPU {}: finalOutput={}, patterns={}, missing={}; "
                                 + "full evidence is in logs/ae2-crafting-recovery.log",
-                        cluster.getBoundsMin(), adjustedPlan.finalOutput(), adjustedPlan.patternTimes().size(),
+                        ae2cr$cpuLabel(), adjustedPlan.finalOutput(), adjustedPlan.patternTimes().size(),
                         ae2cr$describeCounter(adjustedPlan.missingItems(), true));
                 // The original job is still present and untouched. A later change to its
                 // task/CPU state will permit another full preflight. Also permit the
@@ -282,13 +292,13 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
                 if (ae2cr$recalculationAttempts < 3) {
                     AE2CraftingRecovery.LOGGER.warn(
                             "AE2 recovery in-place replan lost an ingredient at CPU {}; recalculating again ({}/3)",
-                            cluster.getBoundsMin(), ae2cr$recalculationAttempts + 1);
+                            ae2cr$cpuLabel(), ae2cr$recalculationAttempts + 1);
                     ae2cr$beginRecoveryCalculation();
                     return;
                 }
                 AE2CraftingRecovery.LOGGER.error(
                         "AE2 recovery in-place replan could not reserve {} at CPU {}",
-                        missingInitialItem, cluster.getBoundsMin());
+                        missingInitialItem, ae2cr$cpuLabel());
                 ae2cr$clearRecoveryState();
                 ae2cr$lastReportedJob = null;
                 return;
@@ -308,10 +318,16 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
             ae2cr$deadlockPasses = 0;
             AE2CraftingRecovery.LOGGER.warn(
                     "AE2 recovery recalculation replaced the task plan in place at CPU {}: finalOutput={}",
-                    cluster.getBoundsMin(), adjustedPlan.finalOutput());
+                    ae2cr$cpuLabel(), adjustedPlan.finalOutput());
+            var recoveredOutput = adjustedPlan.finalOutput();
+            var recoveredOutputName = recoveredOutput == null
+                    ? Component.literal("unknown output")
+                    : recoveredOutput.what().getDisplayName().copy();
             ae2cr$alertPlayer(recoveryPlayerId,
-                    Component.literal("AE2 recovery replanned the stalled craft at CPU ")
+                    Component.literal("AE2 recovery replanned ")
                     .withStyle(ChatFormatting.GREEN)
+                    .append(recoveredOutputName.withStyle(ChatFormatting.GOLD))
+                    .append(Component.literal(" on CPU ").withStyle(ChatFormatting.GREEN))
                     .append(Component.literal(ae2cr$cpuLabel()).withStyle(ChatFormatting.YELLOW)));
             ae2cr$clearRecoveryState();
         } catch (Exception e) {
@@ -319,7 +335,7 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
             ae2cr$recalculation = null;
             ae2cr$lastReportedJob = null;
             AE2CraftingRecovery.LOGGER.error(
-                    "AE2 recovery recalculation failed at CPU {}", cluster.getBoundsMin(), e);
+                    "AE2 recovery recalculation failed at CPU {}", ae2cr$cpuLabel(), e);
             ae2cr$alertPlayer(recoveryPlayerId,
                     Component.literal("AE2 recovery failed while replanning the craft at CPU ")
                     .withStyle(ChatFormatting.RED)
@@ -373,8 +389,8 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
             ae2cr$resetProviderRejectionTracking();
             return;
         }
-        ae2cr$waitingStablePasses = 0;
-        ae2cr$waitingFingerprint = 0;
+        ae2cr$waitingAmounts.clear();
+        ae2cr$waitingSince.clear();
         if (tasks.isEmpty()) {
             ae2cr$deadlockPasses = 0;
             return;
@@ -465,6 +481,14 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
         boolean accepted = provider.pushPattern(pattern, inputHolder);
         if (accepted) {
             ae2cr$acceptedPushesThisPass++;
+            ProviderLocation location = ExpandedAeHighlightCompat.locate(provider);
+            if (location != null) {
+                for (GenericStack output : pattern.getOutputs()) {
+                    if (output != null && output.amount() > 0) {
+                        ae2cr$dispatchedOutputProviders.put(output.what(), location);
+                    }
+                }
+            }
         } else {
             String key = ae2cr$describePattern(pattern) + " provider=" + provider.getClass().getName();
             ae2cr$rejectedPushesThisPass.merge(key, 1, Integer::sum);
@@ -513,9 +537,12 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
                 + " providerLocation=" + ae2cr$rejectedProviderLocationThisPass
                 + " rejectedPushes=[" + rejected + "]");
         AE2CraftingRecovery.LOGGER.error(
-                "AE2 provider repeatedly rejected a ready pattern for five minutes at CPU {}: {}; "
+                "AE2 provider {} repeatedly rejected a ready pattern for five minutes for CPU {}: {}; "
                         + "check the target machine inputs, recipe state, or provider blocking mode",
-                cluster.getBoundsMin(), rejected);
+                ae2cr$rejectedProviderLocationThisPass == null
+                        ? "(location unavailable)"
+                        : ae2cr$rejectedProviderLocationThisPass,
+                ae2cr$cpuLabel(), rejected);
         var player = ae2cr$getConnectedPlayer(jobView.ae2cr$getPlayerId());
         var alert = Component.literal("AE2 machine/provider rejected a ready pattern at CPU ")
                 .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
@@ -604,7 +631,7 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
                 + " inputs=" + candidate.missing();
         RecoveryDiagnostics.record(message);
         AE2CraftingRecovery.LOGGER.warn("AE2 recovery supplied a transactional seed set without cancelling job at CPU {}: {}",
-                cluster.getBoundsMin(), candidate.missing());
+                ae2cr$cpuLabel(), candidate.missing());
         return TopUpOutcome.SUCCESS;
     }
 
@@ -630,54 +657,82 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
         if (ae2cr$waitingWarningJob != job) {
             ae2cr$waitingWarningJob = job;
             ae2cr$warnedWaitingOutputs.clear();
-            ae2cr$waitingFingerprint = 0;
-            ae2cr$waitingStablePasses = 0;
+            ae2cr$waitingAmounts.clear();
+            ae2cr$waitingSince.clear();
+            ae2cr$dispatchedOutputProviders.clear();
         }
-        long fingerprint = 0;
+        long now = cluster.getLevel().getGameTime();
+        var presentKeys = new HashSet<AEKey>();
         for (var entry : waiting) {
-            fingerprint ^= ae2cr$mix64(((long) entry.getKey().hashCode() << 32) ^ entry.getLongValue());
+            AEKey key = entry.getKey();
+            long amount = entry.getLongValue();
+            presentKeys.add(key);
+            Long previousAmount = ae2cr$waitingAmounts.put(key, amount);
+            if (previousAmount == null || previousAmount.longValue() != amount) {
+                ae2cr$waitingSince.put(key, now);
+            }
         }
-        if (fingerprint != ae2cr$waitingFingerprint) {
-            ae2cr$waitingFingerprint = fingerprint;
-            ae2cr$waitingStablePasses = 0;
-            return;
-        }
-        ae2cr$waitingStablePasses++;
+        ae2cr$waitingAmounts.keySet().removeIf(key -> !presentKeys.contains(key));
+        ae2cr$waitingSince.keySet().removeIf(key -> !presentKeys.contains(key));
+        ae2cr$dispatchedOutputProviders.keySet().removeIf(key -> !presentKeys.contains(key));
 
         // Duration alone is diagnostic evidence, never recovery authority. Warn once
-        // per output key for this job after the configured unchanged-wait duration.
-        if (ae2cr$waitingStablePasses >= RecoveryConfig.delayedOutputWarningTicks()) {
-            for (var entry : waiting) {
-                if (!ae2cr$warnedWaitingOutputs.add(entry.getKey())) {
-                    continue;
-                }
-                RecoveryDiagnostics.record("WAITING_OUTPUT_DELAYED cpu=" + ae2cr$cpuPosition()
-                        + " output=" + jobView.ae2cr$getFinalOutput()
-                        + " delayedKey=" + entry.getKey()
-                        + " delayedAmount=" + entry.getLongValue()
-                        + " waiting=" + ae2cr$describeCounter(waiting, true));
-                boolean grouped = RecoveryConfig.GROUP_REPEATED_DELAYED_OUTPUTS.get()
-                        && !DelayedOutputWarningTracker.shouldNotify(
-                                jobView.ae2cr$getPlayerId(), entry.getKey(), cluster.getLevel().getGameTime(),
-                                RecoveryConfig.repeatedOutputGroupTicks());
-                if (grouped) {
-                    RecoveryDiagnostics.record("WAITING_OUTPUT_DELAYED_GROUPED cpu=" + ae2cr$cpuPosition()
-                            + " delayedKey=" + entry.getKey()
-                            + " playerId=" + jobView.ae2cr$getPlayerId());
-                    continue;
-                }
-                int delayMinutes = RecoveryConfig.DELAYED_OUTPUT_WARNING_MINUTES.get();
-                AE2CraftingRecovery.LOGGER.warn(
-                        "AE2 crafting CPU {} has waited at least {} minutes for {}x {}; warning only, no recovery work was submitted",
-                        cluster.getBoundsMin(), delayMinutes, entry.getLongValue(), entry.getKey());
-                ae2cr$alertPlayer(jobView.ae2cr$getPlayerId(),
-                        Component.literal("AE2 crafting CPU " + ae2cr$cpuLabel()
-                                + " has waited over " + delayMinutes + " minutes for ")
-                                .withStyle(ChatFormatting.GOLD)
-                                .append(entry.getKey().getDisplayName().copy().withStyle(ChatFormatting.YELLOW))
-                                .append(Component.literal(". Is its machine stalled or sharing a busy provider?")
-                                        .withStyle(ChatFormatting.GOLD)));
+        // per output key for this job after that specific output remains unchanged for
+        // the configured duration. Progress by unrelated outputs must not reset it.
+        for (var entry : waiting) {
+            long waitingSince = ae2cr$waitingSince.getOrDefault(entry.getKey(), now);
+            if (now - waitingSince < RecoveryConfig.delayedOutputWarningTicks()
+                    || !ae2cr$warnedWaitingOutputs.add(entry.getKey())) {
+                continue;
             }
+            ProviderLocation providerLocation = ae2cr$dispatchedOutputProviders.get(entry.getKey());
+            RecoveryDiagnostics.record("WAITING_OUTPUT_DELAYED cpu=" + ae2cr$cpuPosition()
+                    + " cpuName=\"" + ae2cr$cpuName() + "\""
+                    + " output=" + jobView.ae2cr$getFinalOutput()
+                    + " delayedKey=" + entry.getKey()
+                    + " delayedAmount=" + entry.getLongValue()
+                    + " providerLocation=" + providerLocation
+                    + " waiting=" + ae2cr$describeCounter(waiting, true));
+            boolean grouped = RecoveryConfig.GROUP_REPEATED_DELAYED_OUTPUTS.get()
+                    && !DelayedOutputWarningTracker.shouldNotify(
+                            jobView.ae2cr$getPlayerId(), entry.getKey(), cluster.getLevel().getGameTime(),
+                            RecoveryConfig.repeatedOutputGroupTicks());
+            if (grouped) {
+                RecoveryDiagnostics.record("WAITING_OUTPUT_DELAYED_GROUPED cpu=" + ae2cr$cpuPosition()
+                        + " cpuName=\"" + ae2cr$cpuName() + "\""
+                        + " delayedKey=" + entry.getKey()
+                        + " providerLocation=" + providerLocation
+                        + " playerId=" + jobView.ae2cr$getPlayerId());
+                continue;
+            }
+            int delayMinutes = RecoveryConfig.DELAYED_OUTPUT_WARNING_MINUTES.get();
+            AE2CraftingRecovery.LOGGER.warn(
+                    "AE2 pattern provider {} has not returned {}x {} after at least {} minutes for CPU {}; warning only, no recovery work was submitted",
+                    providerLocation == null ? "(location unavailable)" : providerLocation,
+                    entry.getLongValue(), entry.getKey(), delayMinutes, ae2cr$cpuLabel());
+            var player = ae2cr$getConnectedPlayer(jobView.ae2cr$getPlayerId());
+            var alert = Component.literal("AE2 pattern provider ").withStyle(ChatFormatting.GOLD);
+            if (providerLocation != null) {
+                alert.append(Component.literal(providerLocation.toString()).withStyle(ChatFormatting.YELLOW));
+                if (player != null) {
+                    int token = ExpandedAeHighlightCompat.remember(player, providerLocation);
+                    alert.append(Component.literal(" [Highlight]").withStyle(style -> style
+                            .withColor(ChatFormatting.AQUA)
+                            .withUnderlined(true)
+                            .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND,
+                                    "/ae2cr highlight " + token))
+                            .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
+                                    Component.literal("Highlight this provider with ExpandedAE")))));
+                }
+            } else {
+                alert.append(Component.literal("(location unavailable)").withStyle(ChatFormatting.GRAY));
+            }
+            alert.append(Component.literal(" has not returned " + entry.getLongValue() + "x ")
+                    .withStyle(ChatFormatting.GOLD));
+            alert.append(entry.getKey().getDisplayName().copy().withStyle(ChatFormatting.YELLOW));
+            alert.append(Component.literal(" after " + delayMinutes + "+ minutes for CPU "
+                    + ae2cr$cpuLabel() + ". Is its machine stalled?").withStyle(ChatFormatting.GOLD));
+            ae2cr$alertPlayer(jobView.ae2cr$getPlayerId(), alert);
         }
     }
 
@@ -794,6 +849,7 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
             player.sendSystemMessage(Component.literal("Recalculating craft on CPU " + ae2cr$cpuLabel() + "…")
                     .withStyle(ChatFormatting.AQUA));
             RecoveryDiagnostics.record("MANUAL_REPLAN_REQUESTED cpu=" + ae2cr$cpuPosition()
+                    + " cpuName=\"" + ae2cr$cpuName() + "\""
                     + " player=" + player.getGameProfile().getName()
                     + " assumedInFlight="
                     + ae2cr$describeCounter(jobView.ae2cr$getWaitingFor().list, false));
@@ -919,7 +975,7 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
             ae2cr$lastReportedJob = null;
         } catch (Exception e) {
             ae2cr$recalculation = null;
-            AE2CraftingRecovery.LOGGER.error("AE2 seed-plan recovery failed at CPU {}", cluster.getBoundsMin(), e);
+            AE2CraftingRecovery.LOGGER.error("AE2 seed-plan recovery failed at CPU {}", ae2cr$cpuLabel(), e);
             RecoveryDiagnostics.record("SEED_PLAN_EXCEPTION cpu=" + ae2cr$cpuPosition()
                     + " seed=" + requestedAmount + "x " + requestedKey + " error=" + e);
             ae2cr$clearRecoveryState();
@@ -1175,7 +1231,7 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
             AE2CraftingRecovery.LOGGER.error(
                     "PROVEN AE2 CRAFTING DEADLOCK at CPU {}: finalOutput={}, remainingOperations={}, recovery={}; "
                             + "full evidence is in logs/ae2-crafting-recovery.log",
-                    cluster.getBoundsMin(), output, remainingOperations, topUpOutcome);
+                    ae2cr$cpuLabel(), output, remainingOperations, topUpOutcome);
         }
 
         RecoveryDiagnostics.record("DEADLOCK cpu=" + ae2cr$cpuPosition()
@@ -1209,7 +1265,28 @@ public abstract class CraftingCpuLogicMixin implements ManualRecalculationTarget
     @Unique
     private String ae2cr$cpuLabel() {
         String name = ae2cr$cpuName();
-        return name.isEmpty() ? ae2cr$cpuPosition() : "\"" + name + "\"";
+        if (!name.isEmpty()) {
+            return "\"" + name + "\"";
+        }
+
+        // AE2 only stores explicitly configured CPU names on the cluster. For an
+        // unnamed CPU, its menus synthesize #1, #2, ... by sorting the grid's CPUs
+        // by co-processors and storage. Mirror that logic so chat and logs use the
+        // same label the player sees instead of falling straight back to coordinates.
+        var grid = cluster.getGrid();
+        if (grid != null) {
+            var cpus = new ArrayList<ICraftingCPU>(grid.getCraftingService().getCpus());
+            cpus.sort(Comparator
+                    .comparingInt(ICraftingCPU::getCoProcessors).reversed()
+                    .thenComparing(Comparator.comparingLong(ICraftingCPU::getAvailableStorage).reversed()));
+            for (int i = 0; i < cpus.size(); i++) {
+                if (cpus.get(i) == cluster) {
+                    return "#" + (i + 1);
+                }
+            }
+        }
+
+        return ae2cr$cpuPosition();
     }
 
     @Unique
